@@ -848,7 +848,7 @@ function encodeBundle(
   shift: number,
 ): Buffer {
   const grammar = shared.grammarOf.get(bundle.name)!;
-  // Cell 0 is the empty string, and offset 0 an empty container.
+  // Cell 0 is the empty string.
   const cells = [0];
   const text = new Text(cells, shared.grammars[grammar]!);
 
@@ -1146,6 +1146,8 @@ function assemble(
     if (!added.has(id)) added.set(id, add(b.bytes));
     offsets.writeUInt32LE(added.get(id)!, i * 4);
   });
+  // The runtime looks for the ends of strings 8 bytes at a time.
+  add(Buffer.alloc(8));
   index[Index.ResourcesTop] = index[Index.BundleTop] = top;
 
   const head = Buffer.alloc(pool.header.length + (1 + Index.Top) * 4);

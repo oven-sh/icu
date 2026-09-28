@@ -201,7 +201,9 @@ enum {
  *
  * Only a pool bundle has this version, and the bundles next to it are inside it rather than items of the package,
  * whether they used it or not, but for those that have binary data.
- * The runtime looks for a bundle there first (res_loadFromPool()).
+ * The runtime looks for a bundle there first (res_loadFromPool()), so a file of the bundle's name does not take its place
+ * as it does an item's, but for the files of a time zone update (u_getTimeZoneFilesDirectory()).
+ * It is little-endian, and its key strings are ASCII: nothing writes it otherwise, and ures_swap() does not swap it.
  * After the key strings, it has the following.
  * Each starts where an item of indexes[] says, in 32-bit units from the root resource like all offsets there.
  *
@@ -223,6 +225,7 @@ enum {
  * - The pool's text: strings.
  * - uint16_t bundleNames[]; uint32_t bundleOffsets[]
  * - The bundles.
+ * - 8 bytes, of 0: the runtime looks for the ends of strings 8 bytes at a time, so up to 7 past the last one.
  *
  * A bundle is
  *
@@ -238,7 +241,8 @@ enum {
  * The compact area is addressed in bytes, from its start. It holds fields, headers and strings.
  * A field is a 16-bit number, at any offset. Where it is itself an offset in the compact area,
  * it is one that has been shifted right by the bundle's shift, which is 0 unless the area is larger than a field can tell.
- * Byte 0 is 0: the empty string, and as in version 2 the offset 0 is an empty value of any type.
+ * Byte 0 is 0: the empty string. An empty table or array is not in the compact area:
+ * it is a Table or an Array with the offset 0, as in version 3.
  *
  * Strings: a String-v2 offset at or above poolStringLimit is, less that limit, an offset in the compact area.
  * Below it, it is the ordinal of one of the pool's strings. A Resource16 is the same, with what is above the limit shifted.

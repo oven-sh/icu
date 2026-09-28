@@ -73,7 +73,7 @@ static const struct {
 
 
 /** Most of the keys that a binary search looks at differ from the one it looks for in their first character. */
-U_FORCE_INLINE int compareKeys(const ResourceData *pResData, const char *key, const char *tableKey) {
+U_FORCE_INLINE static inline int compareKeys(const ResourceData *pResData, const char *key, const char *tableKey) {
     if (pResData->useNativeStrcmp) {
         int result = static_cast<uint8_t>(*key) - static_cast<uint8_t>(*tableKey);
         return result != 0 ? result : uprv_strcmp(key, tableKey);
@@ -96,7 +96,7 @@ using icu::ResourceCompactContainer;
 
 /** Every 8th item of a sequence has its offset stored. */
 constexpr int32_t SKIP_SHIFT = 3;
-constexpr uint8_t NARROW_ESCAPE = 0xff;
+constexpr uint8_t UNIT_ESCAPE = 0xff;
 constexpr uint32_t HEADER_ESCAPE = 0xff;
 constexpr uint32_t HEADER_HAS_KEY_BITS = 4;
 /** In a keyset: a URES_TABLE_COMPACT or URES_ARRAY_COMPACT that is stored among the items of the table. */
@@ -200,15 +200,15 @@ private:
 };
 
 /** The type of the item whose key is the keyset's j-th. */
-U_FORCE_INLINE int32_t itemType(const uint16_t *keyset, int32_t j) {
+U_FORCE_INLINE inline int32_t itemType(const uint16_t *keyset, int32_t j) {
     return (keyset[1 + keyset[0] + (j >> 2)] >> ((j & 3) << 2)) & 0xf;
 }
 
 /**
  * No cell of a string is 0 but its last.
- * Looks at 8 bytes at a time, so up to 7 past the last string; the package has as many after its last item.
+ * Looks at 8 bytes at a time, so up to 7 past the last string: an archive has as many after its last bundle.
  */
-U_FORCE_INLINE const uint8_t *skipStrings(const uint8_t *p, int32_t count) {
+U_FORCE_INLINE inline const uint8_t *skipStrings(const uint8_t *p, int32_t count) {
     constexpr uint64_t LOW = 0x7f7f7f7f7f7f7f7f;
     while (count > 0) {
         uint64_t x = load64(p);
@@ -441,7 +441,7 @@ private:
 };
 
 /** @param i 0..c.length-1 */
-U_FORCE_INLINE Resource compactItemByIndex(const ResourceData *pResData, ResourceCompactContainer &c, int32_t i, const char **key) {
+U_FORCE_INLINE inline Resource compactItemByIndex(const ResourceData *pResData, ResourceCompactContainer &c, int32_t i, const char **key) {
     int32_t j = i;
     if (c.keyset != nullptr) {
         j = CompactArea::keyIndex(c, i);
@@ -468,7 +468,7 @@ struct Grammar {
             if (c <= letters) {
                 if (out != nullptr) { out[length] = units[c - 1]; }
                 ++length;
-            } else if (c == NARROW_ESCAPE) {
+            } else if (c == UNIT_ESCAPE) {
                 if (out != nullptr) {
                     out[length] = static_cast<char16_t>((s[0] & 0x7f) | ((s[1] & 0x7f) << 7) | (s[2] << 14));
                 }
@@ -614,10 +614,7 @@ struct WideStrings {
 
 WideStrings gWideStrings;
 
-icu::UMutex *wideStringsMutex() {
-    static icu::UMutex mutex;
-    return &mutex;
-}
+icu::UMutex gWideStringsMutex;
 
 /** @param pool a pool bundle of formatVersion 4 */
 const uint16_t *getGrammar(const ResourceData *pool, uint32_t i) {
@@ -627,7 +624,7 @@ const uint16_t *getGrammar(const ResourceData *pool, uint32_t i) {
 
 /** Writes a string out in UTF-16. Returns nullptr if there is no memory for that. */
 const char16_t *widenFirst(const ResourceData *pResData, uint32_t o, uint32_t key) {
-    icu::Mutex lock(wideStringsMutex());
+    icu::Mutex lock(&gWideStringsMutex);
     const char16_t *there = gWideStrings.find(key);
     if (there != nullptr) { return there; }
     Grammar grammar(pResData->grammar);
@@ -646,7 +643,7 @@ const char16_t *widenFirst(const ResourceData *pResData, uint32_t o, uint32_t ke
  * A string of formatVersion 4 in UTF-16.
  * @param o the offset of its cells in pCompact
  */
-U_FORCE_INLINE const char16_t *widen(const ResourceData *pResData, uint32_t o, int32_t *pLength) {
+U_FORCE_INLINE inline const char16_t *widen(const ResourceData *pResData, uint32_t o, int32_t *pLength) {
     if (pResData->pCompact[o] == 0) {
         // What an empty string is in the other versions. There is code that looks at the unit before the end of any string.
         if (pLength != nullptr) { *pLength = 0; }
@@ -739,7 +736,8 @@ isAcceptable(void *context,
         pInfo->dataFormat[1]==0x65 &&
         pInfo->dataFormat[2]==0x73 &&
         pInfo->dataFormat[3]==0x42 &&
-        (1<=pInfo->formatVersion[0] && pInfo->formatVersion[0]<=4);
+        ((1<=pInfo->formatVersion[0] && pInfo->formatVersion[0]<=3) ||
+            (pInfo->formatVersion[0]==4 && !U_IS_BIG_ENDIAN && U_CHARSET_FAMILY==U_ASCII_FAMILY));
 }
 
 /* semi-public functions ---------------------------------------------------- */
@@ -830,7 +828,7 @@ res_init(ResourceData *pResData,
             pResData->pCompact = reinterpret_cast<const uint8_t*>(pResData->pRoot + indexes[URES_INDEX_POOL_TEXT]);
             pResData->grammar = getGrammar(pResData, indexes[URES_INDEX_POOL_GRAMMAR]);
             {
-                icu::Mutex lock(wideStringsMutex());
+                icu::Mutex lock(&gWideStringsMutex);
                 if(gWideStrings.archiveCount == WideStrings::MAX_ARCHIVES ||
                         indexes[URES_INDEX_BUNDLE_TOP] >= (1 << (WideStrings::OFFSET_BITS - 2))) {
                     *errorCode=U_INVALID_FORMAT_ERROR;
@@ -921,7 +919,6 @@ res_loadFromPool(ResourceData *pResData, const ResourceData *pool, const char *n
     pResData->rootRes=static_cast<Resource>(*bundle);
     pResData->p16BitUnits=&gEmpty16;
     pResData->poolBundleKeys=keys;
-    pResData->poolBundleStrings=pool->p16BitUnits;
     pResData->poolStringIndexLimit=pResData->poolStringIndex16Limit=limits&0xffff;
     pResData->noFallback=((limits>>16)&URES_ATT_NO_FALLBACK)!=0;
     pResData->fieldShift=(limits>>18)&3;
@@ -1034,17 +1031,18 @@ namespace {
  */
 UBool isNoInheritanceMarker(const ResourceData *pResData, Resource res) {
     uint32_t offset=RES_GET_OFFSET(res);
-    if (offset == 0) {
+    if (RES_GET_TYPE(res) == URES_STRING_V2 && pResData->pCompact != nullptr) {
+        // Before the others: here the offset 0 is a string like any other, the first of the pool's.
+        int32_t length;
+        const char16_t *p = res_getStringNoTrace(pResData, res, &length);
+        return length == 3 && p[0] == 0x2205 && p[1] == 0x2205 && p[2] == 0x2205;
+    } else if (offset == 0) {
         // empty string
     } else if (res == offset) {
         const int32_t *p32=pResData->pRoot+res;
         int32_t length=*p32;
         const char16_t* p = reinterpret_cast<const char16_t*>(p32);
         return length == 3 && p[2] == 0x2205 && p[3] == 0x2205 && p[4] == 0x2205;
-    } else if (RES_GET_TYPE(res) == URES_STRING_V2 && pResData->pCompact != nullptr) {
-        int32_t length;
-        const char16_t *p = res_getStringNoTrace(pResData, res, &length);
-        return length == 3 && p[0] == 0x2205 && p[1] == 0x2205 && p[2] == 0x2205;
     } else if (RES_GET_TYPE(res) == URES_STRING_V2) {
         const char16_t *p;
         if (static_cast<int32_t>(offset) < pResData->poolStringIndexLimit) {

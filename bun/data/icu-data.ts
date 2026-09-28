@@ -517,8 +517,6 @@ function writePackage(): Buffer {
     push(readFileSync(join(args.work!, name)));
     push(pad(offset));
   });
-  // uresdata.cpp looks for the ends of strings 8 bytes at a time.
-  push(Buffer.alloc(16, 0xaa));
   return Buffer.concat([header, toc, ...parts]);
 }
 
