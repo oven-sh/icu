@@ -1237,10 +1237,13 @@ addCollation(ParseState* state, TableResource  *result, const char *collationTyp
             // all sub-elements of the collation table, including the Version.
             /* in order to achieve smaller data files, we can direct genrb */
             /* to omit collation rules */
-            if(!state->omitCollationRules) {
-                result->add(member, line, *status);
-                member = nullptr;
+            // oven-sh/icu: Something is left of them. Whether ucol_getRules() returns anything
+            // is how JavaScriptCore tells a tailoring from the root collator.
+            if(state->omitCollationRules && !rules.isEmpty()) {
+                sr->fString.setTo(u' ');
             }
+            result->add(member, line, *status);
+            member = nullptr;
         }
         else  // Just copy non-special items.
         {
