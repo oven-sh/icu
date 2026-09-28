@@ -133,6 +133,7 @@ SuccinctDictionaryMatcher::SuccinctDictionaryMatcher(const uint8_t *data, UDataM
     labels = data + header[4];
     blocks = reinterpret_cast<const Block *>(data + header[5]);
     wordValues = data + header[6];
+    starts = reinterpret_cast<const uint32_t *>(data + header[7]);
 }
 
 SuccinctDictionaryMatcher::~SuccinctDictionaryMatcher() {
@@ -204,38 +205,55 @@ int32_t SuccinctDictionaryMatcher::matches(UText *text, int32_t maxLength, int32
         if (place-- == 0) {
             break;
         }
-        int32_t node;
-        if (place < singles) {
-            node = find(first, place);
+        UBool isWord;
+        int32_t value = 0;
+        // The first child, 0 if there is none, -1 if that is yet to be found.
+        int32_t child;
+        int32_t node = 0;
+        if (first == 0) {
+            uint32_t start = starts[place];
+            if (start == 0) {
+                break;
+            }
+            isWord = (start >> 20) & 1;
+            value = static_cast<int32_t>(start >> 24);
+            child = static_cast<int32_t>(start & 0xfffff);
         } else {
-            place -= singles;
-            node = find(first, singles + (place >> 8));
-            if (node >= 0) {
-                node = find(firstChild(node), place & 0xff);
+            if (place < singles) {
+                node = find(first, place);
+            } else {
+                place -= singles;
+                node = find(first, singles + (place >> 8));
+                if (node >= 0) {
+                    node = find(firstChild(node), place & 0xff);
+                }
             }
+            if (node < 0) {
+                break;
+            }
+            const Block &b = blocks[node >> 6];
+            isWord = (b.isWord >> (node & 63)) & 1;
+            if (isWord && values != nullptr) {
+                value = wordValues[b.words + countBits(b.isWord & bitsBelow(node & 63))];
+            }
+            child = -static_cast<int32_t>((b.hasChildren >> (node & 63)) & 1);
         }
-        if (node < 0) {
+        if (isWord && wordCount < limit) {
+            if (values != nullptr) {
+                values[wordCount] = value;
+            }
+            if (lengths != nullptr) {
+                lengths[wordCount] = lengthMatched;
+            }
+            if (cpLengths != nullptr) {
+                cpLengths[wordCount] = codePointsMatched;
+            }
+            ++wordCount;
+        }
+        if (child == 0 || lengthMatched >= maxLength) {
             break;
         }
-        const Block &b = blocks[node >> 6];
-        if (((b.isWord >> (node & 63)) & 1) != 0) {
-            if (wordCount < limit) {
-                if (values != nullptr) {
-                    values[wordCount] = wordValues[b.words + countBits(b.isWord & bitsBelow(node & 63))];
-                }
-                if (lengths != nullptr) {
-                    lengths[wordCount] = lengthMatched;
-                }
-                if (cpLengths != nullptr) {
-                    cpLengths[wordCount] = codePointsMatched;
-                }
-                ++wordCount;
-            }
-        }
-        if (((b.hasChildren >> (node & 63)) & 1) == 0 || lengthMatched >= maxLength) {
-            break;
-        }
-        first = firstChild(node);
+        first = child > 0 ? child : firstChild(node);
     }
 
     if (prefix != nullptr) {

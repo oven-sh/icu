@@ -136,6 +136,10 @@ private:
  *   There are 8 more bytes than nodes.
  * - Block blocks[]: for each 64 nodes, and one more whose isLast is all ones
  * - uint8_t values[]: for each node that is a word, in the order of the nodes
+ * - uint32_t starts[]: for each unit that a word has, by its place in the order of frequency, what there is to know
+ *   about the node that it leads to from the root: the first of its children in bits 19..0, 0 if it has none,
+ *   bit 20 if it is a word, and then the value in bits 31..24. 0 if there is no such node.
+ *   Every search starts at the root, which has more children than any other node.
  *
  * It is little-endian: nothing writes it otherwise, and udict_swap() does not swap it.
  */
@@ -172,6 +176,7 @@ private:
     const uint8_t *labels;
     const Block *blocks;
     const uint8_t *wordValues;
+    const uint32_t *starts;
     UDataMemory *file;
 };
 

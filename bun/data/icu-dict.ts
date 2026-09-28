@@ -28,6 +28,7 @@ const Header = {
   Labels: 4,
   Blocks: 5,
   Values: 6,
+  Starts: 7,
   Length: 8,
 } as const;
 
@@ -37,6 +38,9 @@ const Block = { HasChildren: 0, IsLast: 8, IsWord: 16, FirstChild: 24, Words: 28
 
 /** A group of at least so many siblings has a bit for each byte there is, in place of its first labels. */
 const DENSE = 32;
+
+/** A start: the first child in the low bits, 0 if there is none, whether it is a word, and the word's value. */
+const Start = { ChildBits: 20, IsWord: 1 << 20, ValueShift: 24 } as const;
 
 class Bits {
   readonly words: Uint32Array;
@@ -237,6 +241,30 @@ function write(trie: Trie): Buffer {
   add(Header.Blocks, blocks);
   if (trie.values.some(value => value < 0 || value > 0xff)) throw new Error("a value does not fit a byte");
   add(Header.Values, Uint8Array.from(trie.values));
+
+  // Every search starts at the root, which has more children than any other node.
+  if (nodes >> Start.ChildBits) throw new Error("more nodes than a start can tell");
+  const childOf = new Uint32Array(nodes);
+  const valueOf = new Uint8Array(nodes);
+  for (let node = 0, parent = 0, word = 0; node < nodes; node++) {
+    if (trie.hasChildren.test(node)) childOf[node] = trie.firstChildren[parent++]!;
+    if (trie.isWord.test(node)) valueOf[node] = trie.values[word++]!;
+  }
+  const starts = new Uint32Array(trie.order.size);
+  const group = function* (first: number) {
+    for (let node = first; ; node++) {
+      yield node;
+      if (trie.isLast.test(node)) return;
+    }
+  };
+  const start = (place: number, node: number) =>
+    (starts[place] = (childOf[node]! | (trie.isWord.test(node) ? Start.IsWord | (valueOf[node]! << Start.ValueShift) : 0)) >>> 0);
+  for (const node of group(0)) {
+    const label = trie.labels[node]!;
+    if (label < trie.singles) start(label, node);
+    else for (const second of group(childOf[node]!)) start(trie.singles + ((label - trie.singles) << 8) + trie.labels[second]!, second);
+  }
+  add(Header.Starts, starts);
   return Buffer.concat([Buffer.from(header.buffer), ...parts]);
 }
 
@@ -271,22 +299,30 @@ function read(data: Buffer): Map<string, number> {
     return Array.from({ length: 0x100 }, (_, label) => label).filter(label => (data[stored + (label >> 3)]! >> (label & 7)) & 1);
   };
   const words = new Map<string, number>();
+  /** By the place of a unit. */
+  const starts = new Map<number, number>();
   const walk = (first: number, prefix: string, lead: number) => {
     labelsOf(first).forEach((label, i, all) => {
       const node = first + i;
       if (test(Block.IsLast, node) !== (i === all.length - 1)) throw new Error("a group has other labels than nodes");
       const isLead = lead < 0 && label >= singles;
-      const text = isLead
-        ? prefix
-        : prefix + String.fromCharCode(unitOf.get(lead < 0 ? label : singles + ((lead - singles) << 8) + label)!);
+      const place = lead < 0 ? label : singles + ((lead - singles) << 8) + label;
+      const text = isLead ? prefix : prefix + String.fromCharCode(unitOf.get(place)!);
+      let start = test(Block.HasChildren, node) ? firstChild(node) : 0;
       if (test(Block.IsWord, node)) {
         if (isLead) throw new Error("a word ends in the middle of a character");
-        words.set(text, data[at(Header.Values) + data.readUInt32LE(block(node) + Block.Words) + before(Block.IsWord, node)]!);
+        const value = data[at(Header.Values) + data.readUInt32LE(block(node) + Block.Words) + before(Block.IsWord, node)]!;
+        words.set(text, value);
+        start = (start | Start.IsWord | (value << Start.ValueShift)) >>> 0;
       }
+      if (!isLead && prefix === "") starts.set(place, start);
       if (test(Block.HasChildren, node)) walk(firstChild(node), text, isLead ? label : -1);
     });
   };
   walk(0, "", -1);
+  for (const place of unitOf.keys()) {
+    if (data.readUInt32LE(at(Header.Starts) + place * 4) !== (starts.get(place) ?? 0)) throw new Error("a start is wrong");
+  }
   return words;
 }
 
