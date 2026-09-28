@@ -33,7 +33,7 @@ SharedNumberLocaleData::SharedNumberLocaleData(const Locale &locale, const Numbe
 SharedNumberLocaleData::~SharedNumberLocaleData() = default;
 
 const char16_t *SharedNumberLocaleData::getPattern(number::impl::CldrPatternStyle style, UErrorCode &status) const {
-    // Acquire, and release below: what the pointer points to has to be seen with it.
+    // The string may have been written when it was asked for, see widen() in uresdata.cpp: that has to be seen with the pointer.
     const char16_t *pattern = patterns[style].load(std::memory_order_acquire);
     if (pattern == nullptr) {
         UErrorCode patternStatus = U_ZERO_ERROR;

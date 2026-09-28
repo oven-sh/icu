@@ -416,6 +416,7 @@ static UBool U_CALLCONV ures_cleanup()
         uhash_close(cache);
         cache = nullptr;
     }
+    res_cleanup();
     gCacheInitOnce.reset();
     return true;
 }
@@ -517,7 +518,17 @@ static UResourceDataEntry *init_entry(const char *localeID, const char *path, UE
         }
 
         /* this is the actual loading */
-        res_load(&(r->fData), r->fPath, r->fName, status);
+        if (uprv_strcmp(name, kPoolBundleName) != 0) {
+            /* formatVersion 4: the bundles next to a pool bundle are inside it */
+            UErrorCode poolStatus = U_ZERO_ERROR;
+            UResourceDataEntry *pool = getPoolEntry(r->fPath, &poolStatus);
+            if (U_SUCCESS(poolStatus) && res_loadFromPool(&(r->fData), &(pool->fData), r->fName, status)) {
+                r->fPool = pool;
+            }
+        }
+        if (r->fPool == nullptr) {
+            res_load(&(r->fData), r->fPath, r->fName, status);
+        }
 
         if (U_FAILURE(*status)) {
             /* if we failed to load due to an out-of-memory error, exit early. */
@@ -530,7 +541,7 @@ static UResourceDataEntry *init_entry(const char *localeID, const char *path, UE
             r->fBogus = U_USING_FALLBACK_WARNING;
         } else { /* if we have a regular entry */
             Resource aliasres;
-            if (r->fData.usesPoolBundle) {
+            if (r->fData.usesPoolBundle && r->fPool == nullptr) {
                 r->fPool = getPoolEntry(r->fPath, status);
                 if (U_SUCCESS(*status)) {
                     const int32_t *poolIndexes = r->fPool->fData.pRoot + 1;
@@ -1623,6 +1634,7 @@ U_CAPI const char16_t* U_EXPORT2 ures_getNextString(UResourceBundle *resB, int32
     case URES_TABLE:
     case URES_TABLE16:
     case URES_TABLE32:
+    case URES_TABLE_COMPACT:
       r = res_getTableItemByIndex(&resB->getResData(), resB->fRes, resB->fIndex, key);
       if(r == RES_BOGUS && resB->fHasFallback) {
         /* TODO: do the fallback */
@@ -1630,6 +1642,7 @@ U_CAPI const char16_t* U_EXPORT2 ures_getNextString(UResourceBundle *resB, int32
       return ures_getStringWithAlias(resB, r, resB->fIndex, len, status);
     case URES_ARRAY:
     case URES_ARRAY16:
+    case URES_ARRAY_COMPACT:
       r = res_getArrayItem(&resB->getResData(), resB->fRes, resB->fIndex);
       if(r == RES_BOGUS && resB->fHasFallback) {
         /* TODO: do the fallback */
@@ -1679,6 +1692,7 @@ U_CAPI UResourceBundle* U_EXPORT2 ures_getNextResource(UResourceBundle *resB, UR
         case URES_TABLE:
         case URES_TABLE16:
         case URES_TABLE32:
+        case URES_TABLE_COMPACT:
             r = res_getTableItemByIndex(&resB->getResData(), resB->fRes, resB->fIndex, &key);
             if(r == RES_BOGUS && resB->fHasFallback) {
                 /* TODO: do the fallback */
@@ -1686,6 +1700,7 @@ U_CAPI UResourceBundle* U_EXPORT2 ures_getNextResource(UResourceBundle *resB, UR
             return init_resb_result(resB->fData, r, key, resB->fIndex, resB, fillIn, status);
         case URES_ARRAY:
         case URES_ARRAY16:
+        case URES_ARRAY_COMPACT:
             r = res_getArrayItem(&resB->getResData(), resB->fRes, resB->fIndex);
             if(r == RES_BOGUS && resB->fHasFallback) {
                 /* TODO: do the fallback */
@@ -1725,6 +1740,7 @@ U_CAPI UResourceBundle* U_EXPORT2 ures_getByIndex(const UResourceBundle *resB, i
         case URES_TABLE:
         case URES_TABLE16:
         case URES_TABLE32:
+        case URES_TABLE_COMPACT:
             r = res_getTableItemByIndex(&resB->getResData(), resB->fRes, indexR, &key);
             if(r == RES_BOGUS && resB->fHasFallback) {
                 /* TODO: do the fallback */
@@ -1732,6 +1748,7 @@ U_CAPI UResourceBundle* U_EXPORT2 ures_getByIndex(const UResourceBundle *resB, i
             return init_resb_result(resB->fData, r, key, indexR, resB, fillIn, status);
         case URES_ARRAY:
         case URES_ARRAY16:
+        case URES_ARRAY_COMPACT:
             r = res_getArrayItem(&resB->getResData(), resB->fRes, indexR);
             if(r == RES_BOGUS && resB->fHasFallback) {
                 /* TODO: do the fallback */
@@ -1768,6 +1785,7 @@ U_CAPI const char16_t* U_EXPORT2 ures_getStringByIndex(const UResourceBundle *re
         case URES_TABLE:
         case URES_TABLE16:
         case URES_TABLE32:
+        case URES_TABLE_COMPACT:
             r = res_getTableItemByIndex(&resB->getResData(), resB->fRes, indexS, &key);
             if(r == RES_BOGUS && resB->fHasFallback) {
                 /* TODO: do the fallback */
@@ -1775,6 +1793,7 @@ U_CAPI const char16_t* U_EXPORT2 ures_getStringByIndex(const UResourceBundle *re
             return ures_getStringWithAlias(resB, r, indexS, len, status);
         case URES_ARRAY:
         case URES_ARRAY16:
+        case URES_ARRAY_COMPACT:
             r = res_getArrayItem(&resB->getResData(), resB->fRes, indexS);
             if(r == RES_BOGUS && resB->fHasFallback) {
                 /* TODO: do the fallback */
