@@ -31,6 +31,7 @@
 ******************************************************************************
 */
 
+#include <atomic>
 #include <cstddef>
 #include <optional>
 #include <string_view>
@@ -68,10 +69,11 @@ U_NAMESPACE_BEGIN
 static Locale   *gLocaleCache = nullptr;
 static UInitOnce gLocaleCacheInitOnce {};
 
-// gDefaultLocaleMutex protects all access to gDefaultLocalesHashT and gDefaultLocale.
+// gDefaultLocaleMutex protects all access to gDefaultLocalesHashT, and writing gDefaultLocale.
+// What gDefaultLocale points to is in gDefaultLocalesHashT, which nothing is removed from until u_cleanup().
 static UMutex gDefaultLocaleMutex;
 static UHashtable *gDefaultLocalesHashT = nullptr;
-static Locale *gDefaultLocale = nullptr;
+static std::atomic<Locale *> gDefaultLocale{nullptr};
 
 /**
  * \def ULOC_STRING_LIMIT
@@ -213,8 +215,8 @@ Locale *locale_set_default_internal(const char *id, UErrorCode& status) {
             return gDefaultLocale;
         }
     }
-    gDefaultLocale = newDefault;
-    return gDefaultLocale;
+    gDefaultLocale.store(newDefault, std::memory_order_release);
+    return newDefault;
 }
 
 U_NAMESPACE_END
@@ -2150,11 +2152,9 @@ Locale::setToBogus() {
 const Locale& U_EXPORT2
 Locale::getDefault()
 {
-    {
-        Mutex lock(&gDefaultLocaleMutex);
-        if (gDefaultLocale != nullptr) {
-            return *gDefaultLocale;
-        }
+    Locale *locale = gDefaultLocale.load(std::memory_order_acquire);
+    if (locale != nullptr) {
+        return *locale;
     }
     UErrorCode status = U_ZERO_ERROR;
     return *locale_set_default_internal(nullptr, status);
