@@ -159,9 +159,25 @@ struct CollationMappings {
     /** Sets rangesBefore and RANGE_WORDS_LENGTH from rangeBits. @return the number of ranges */
     U_I18N_API int32_t countRanges();
 
-    /** The number of bytes that write() writes, a multiple of 8. */
+    /** The number of bytes that write() writes, a multiple of 8. INT32_MAX if that is too many. */
     U_I18N_API int32_t getBinaryLength() const;
 
+    /**
+     * Writes, in the platform's byte order:
+     *
+     * int32_t lengths[LENGTHS_COUNT];
+     * struct { int32_t i; uint64_t rangeBits_i; } rangeWords[RANGE_WORDS_LENGTH]; -- 12 bytes each, ascending
+     * uint64_t blockBits[BLOCKS_LENGTH]; -- at a multiple of 4
+     * uint32_t blockValues[BLOCKS_LENGTH];
+     * uint32_t span32[SPAN32_LENGTH];
+     * uint32_t values32[VALUES32_LENGTH];
+     * uint16_t index[INDEX_LENGTH];
+     * uint16_t span16[SPAN16_LENGTH];
+     * uint16_t values16[VALUES16_LENGTH];
+     * and zeros up to a multiple of 8 bytes.
+     *
+     * ucol_swap() knows this too.
+     */
     U_I18N_API void write(uint8_t *dest) const;
 
     /**

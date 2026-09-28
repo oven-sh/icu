@@ -970,7 +970,15 @@ writeCollationDataTOML(const char* outputdir, const char* name, const char* coll
     uint32_t trieDefault = root ? icu::Collation::UNASSIGNED_CE32 : icu::Collation::FALLBACK_CE32;
     icu::LocalUMutableCPTriePointer builder(umutablecptrie_open(trieDefault, trieDefault, status));
 
-    {
+    if (data->trie == nullptr) {
+        // ICU's tailorings have copies of the base's Hangul CE32s, in blocks per Jamo L. So has what ICU4X reads.
+        for (UChar32 c = icu::Hangul::HANGUL_BASE; c < icu::Hangul::HANGUL_LIMIT; c += icu::Hangul::JAMO_VT_COUNT) {
+            convertTrie(builder.getAlias(), c, c + icu::Hangul::JAMO_VT_COUNT - 1, data->base->getCE32(c));
+        }
+        data->mappings.forEachCodePoint([&builder](UChar32 c, uint32_t ce32) {
+            return convertTrie(builder.getAlias(), c, c, ce32);
+        });
+    } else {
         UChar32 start = 0, end;
         uint32_t value;
         while ((end = ucptrie_getRange(data->trie, start, UCPMAP_RANGE_FIXED_LEAD_SURROGATES,
@@ -1366,6 +1374,7 @@ addCollation(ParseState* state, TableResource  *result, const char *collationTyp
     if(U_FAILURE(intStatus)) {
         fprintf(stderr, "CollationDataWriter::writeTailoring() failed: %s\n",
                 u_errorName(intStatus));
+        *status = intStatus;
         res_close(result);
         return nullptr;
     }

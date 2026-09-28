@@ -469,7 +469,7 @@ CollationDataReader::isAcceptable(void *context,
         pInfo->dataFormat[1] == 0x43 &&
         pInfo->dataFormat[2] == 0x6f &&
         pInfo->dataFormat[3] == 0x6c &&
-        pInfo->formatVersion[0] == 5
+        pInfo->formatVersion[0] == 6
     ) {
         UVersionInfo *version = static_cast<UVersionInfo *>(context);
         if(version != nullptr) {

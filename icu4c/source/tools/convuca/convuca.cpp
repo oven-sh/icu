@@ -47,8 +47,10 @@ int main(int argc, char *argv[]) {
     for (size_t n; (n = fread(buffer, 1, sizeof(buffer), f)) > 0;) { in.insert(in.end(), buffer, buffer + n); }
     fclose(f);
 
-    // DataHeader: uint16_t headerSize, then among others char dataFormat[4] at 12.
+    // DataHeader: uint16_t headerSize, then among others char dataFormat[4] at 12 and uint8_t formatVersion[4] at 16.
     if (in.size() < 24 || memcmp(&in[12], "UCol", 4) != 0) { die("not collation data:", argv[1]); }
+    if (in[16] != 5) { die("not ICU's formatVersion 5:", argv[1]); }
+    in[16] = 6;
     uint16_t headerSize;
     memcpy(&headerSize, &in[0], 2);
     int32_t *indexes = reinterpret_cast<int32_t *>(&in[headerSize]);

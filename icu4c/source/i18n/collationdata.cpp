@@ -56,9 +56,11 @@ CollationMappings::countRanges() {
 
 int32_t
 CollationMappings::getBinaryLength() const {
-    return (MAPPINGS_HEADER_LENGTH + (lengths[RANGE_WORDS_LENGTH] + lengths[BLOCKS_LENGTH]) * 12 +
-            (lengths[SPAN32_LENGTH] + lengths[VALUES32_LENGTH]) * 4 +
-            (lengths[INDEX_LENGTH] + lengths[SPAN16_LENGTH] + lengths[VALUES16_LENGTH]) * 2 + 7) & ~7;
+    int64_t length = (MAPPINGS_HEADER_LENGTH +
+            (static_cast<int64_t>(lengths[RANGE_WORDS_LENGTH]) + lengths[BLOCKS_LENGTH]) * 12 +
+            (static_cast<int64_t>(lengths[SPAN32_LENGTH]) + lengths[VALUES32_LENGTH]) * 4 +
+            (static_cast<int64_t>(lengths[INDEX_LENGTH]) + lengths[SPAN16_LENGTH] + lengths[VALUES16_LENGTH]) * 2 + 7) & ~7;
+    return length <= INT32_MAX ? static_cast<int32_t>(length) : INT32_MAX;
 }
 
 void
@@ -91,7 +93,7 @@ CollationMappings::read(const uint8_t *bytes, int32_t length) {
     for(int32_t i = 0; i < LENGTHS_COUNT; ++i) {
         if(lengths[i] < 0 || lengths[i] > (i == SPAN16_START || i == SPAN32_START ? 0x10ffff : length)) { return false; }
     }
-    if(getBinaryLength() > length) { return false; }
+    if(lengths[RESERVED_LENGTH] != 0 || getBinaryLength() > length) { return false; }
     bytes += MAPPINGS_HEADER_LENGTH;
     uprv_memset(rangeBits, 0, sizeof(rangeBits));
     for(int32_t n = lengths[RANGE_WORDS_LENGTH]; n > 0; --n, bytes += 12) {

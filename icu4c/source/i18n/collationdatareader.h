@@ -111,7 +111,7 @@ private:
 
 /*
  * Format of collation data (ucadata.icu, binary data in coll/ *.res files).
- * Format version 5.
+ * Format version 6, which is oven-sh/icu's. ICU's is 5, which is not read.
  *
  * The root collation data is stored in the ucadata.icu file.
  * Tailorings are stored inside .res resource bundle files, with a complete file header.
@@ -177,14 +177,14 @@ private:
  *      that are either stored as part of the reorderCodes array
  *      or regenerated at load time.
  *
- * UCPTrie trie; -- see ucptrie_impl.h and ucptrie.h
- * (oven-sh/icu. A UTrie2 in ICU, whose data/in/coll/ucadata-*.icu the tool convuca converted.)
- *      The trie holds the main collation data. Each code point is mapped to a 32-bit value.
+ * In the root collation data: UCPTrie trie; -- see ucptrie_impl.h and ucptrie.h
+ * In a tailoring: CollationMappings mappings; -- see collationmappings.h
+ *      This holds the main collation data. Each code point is mapped to a 32-bit value.
  *      It encodes a simple collation element (CE) in compact form, unless bits 7..6 are both set,
  *      in which case it is a special CE32 and contains a 4-bit tag and further data.
  *      See the Collation class for details.
  *
- *      The trie has a value for each lead surrogate code unit with some bits encoding
+ *      The root's trie has a value for each lead surrogate code unit with some bits encoding
  *      collective properties of the 1024 supplementary characters whose UTF-16 form starts with
  *      the lead surrogate. See Collation::LEAD_SURROGATE_TAG..
  *
@@ -230,6 +230,15 @@ private:
  *
  * UBool compressibleBytes[]; -- empty in all tailorings
  *      Flag for getSortKey(), indicating primary weight lead bytes that are compressible.
+ *
+ * -----------------
+ * Changes for formatVersion 6 (oven-sh/icu)
+ *
+ * The root collation data has a UCPTrie in place of a UTrie2. ICU's source has that data in binary form
+ * (data/in/coll/ucadata-*.icu), which the tool convuca converted.
+ * A tailoring has CollationMappings in place of a UTrie2. They map only what the tailoring maps:
+ * whoever finds Collation::FALLBACK_CE32 there asks the root, as before.
+ * A tailoring has no copies of the root's mappings for ASCII and Latin-1 letters.
  *
  * -----------------
  * Changes for formatVersion 5 (ICU 55)

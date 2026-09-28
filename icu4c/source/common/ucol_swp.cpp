@@ -267,7 +267,7 @@ swapFormatVersion3(const UDataSwapper *ds,
     return header.size;
 }
 
-// swap formatVersion 4 or 5 ----------------------------------------------- ***
+// swap formatVersion 4, 5 or 6 -------------------------------------------- ***
 
 // The following are copied from CollationDataReader, trading an awkward copy of constants
 // for an awkward relocation of the i18n collationdatareader.h file into the common library.
@@ -301,7 +301,7 @@ enum {
 };
 
 int32_t
-swapFormatVersion4(const UDataSwapper *ds,
+swapFormatVersion4(const UDataSwapper *ds, int32_t formatVersion,
                    const void *inData, int32_t length, void *outData,
                    UErrorCode &errorCode) {
     if(U_FAILURE(errorCode)) { return 0; }
@@ -384,16 +384,30 @@ swapFormatVersion4(const UDataSwapper *ds,
     index = IX_TRIE_OFFSET;
     offset = indexes[index];
     length = indexes[index + 1] - offset;
-    if(length > 0 && indexes[IX_ROOT_ELEMENTS_OFFSET + 1] > indexes[IX_ROOT_ELEMENTS_OFFSET]) {
-        utrie_swapAnyVersion(ds, inBytes + offset, length, outBytes + offset, &errorCode);
+    if(length > 0 && formatVersion < 6) {
+        utrie2_swap(ds, inBytes + offset, length, outBytes + offset, &errorCode);
+    } else if(length > 0 && indexes[IX_ROOT_ELEMENTS_OFFSET + 1] > indexes[IX_ROOT_ELEMENTS_OFFSET]) {
+        ucptrie_swap(ds, inBytes + offset, length, outBytes + offset, &errorCode);
     } else if(length > 0 && ds->inIsBigEndian != ds->outIsBigEndian) {
-        // A tailoring: as CollationMappings::write() in i18n/collationdata.cpp writes it.
-        enum { RANGE_WORDS, INDEX, SPAN16, SPAN32, BLOCKS, VALUES32, VALUES16, LENGTHS_COUNT = 10 };
+        // A tailoring: see CollationMappings::write() in i18n/collationmappings.h.
+        enum { RANGE_WORDS, INDEX, SPAN16, SPAN32, BLOCKS, VALUES32, VALUES16, COUNTS_LIMIT, LENGTHS_COUNT = 10 };
         const uint8_t *in = inBytes + offset;
         uint8_t *out = outBytes + offset;
-        int32_t lengths[LENGTHS_COUNT];
-        for(int32_t i = 0; i < LENGTHS_COUNT; ++i) {
+        int32_t lengths[LENGTHS_COUNT] = {};
+        int64_t size = LENGTHS_COUNT * 4;
+        for(int32_t i = 0; size <= length && i < LENGTHS_COUNT; ++i) {
             lengths[i] = udata_readInt32(ds, reinterpret_cast<const int32_t *>(in)[i]);
+            if(i < COUNTS_LIMIT && lengths[i] < 0) { size = INT64_MAX; }
+        }
+        if(size <= length) {
+            size += 12 * (static_cast<int64_t>(lengths[RANGE_WORDS]) + lengths[BLOCKS]) +
+                4 * (static_cast<int64_t>(lengths[SPAN32]) + lengths[VALUES32]) +
+                2 * (static_cast<int64_t>(lengths[INDEX]) + lengths[SPAN16] + lengths[VALUES16]);
+        }
+        if(size > length) {
+            udata_printError(ds, "ucol_swap(formatVersion=6): too few bytes (%d) for the mappings of a tailoring\n", length);
+            errorCode = U_INDEX_OUTOFBOUNDS_ERROR;
+            return 0;
         }
         // The 64-bit words are at multiples of 4.
         auto swap = [&](int32_t width, int32_t count) {
@@ -411,9 +425,6 @@ swapFormatVersion4(const UDataSwapper *ds,
         swap(8, lengths[BLOCKS]);
         swap(4, lengths[BLOCKS] + lengths[SPAN32] + lengths[VALUES32]);
         swap(2, lengths[INDEX] + lengths[SPAN16] + lengths[VALUES16]);
-        if(in > inBytes + offset + length) {
-            errorCode = U_INDEX_OUTOFBOUNDS_ERROR;
-        }
     }
 
     index = IX_RESERVED8_OFFSET;
@@ -521,7 +532,7 @@ ucol_swap(const UDataSwapper *ds,
         info.dataFormat[1]==0x43 &&
         info.dataFormat[2]==0x6f &&
         info.dataFormat[3]==0x6c &&
-        (3<=info.formatVersion[0] && info.formatVersion[0]<=5)
+        (3<=info.formatVersion[0] && info.formatVersion[0]<=6)
     )) {
         udata_printError(ds, "ucol_swap(): data format %02x.%02x.%02x.%02x "
                          "(format version %02x.%02x) is not recognized as collation data\n",
@@ -537,7 +548,7 @@ ucol_swap(const UDataSwapper *ds,
     outData=(outData == nullptr) ? nullptr : (char *)outData+headerSize;
     int32_t collationSize;
     if(info.formatVersion[0]>=4) {
-        collationSize=swapFormatVersion4(ds, inData, length, outData, *pErrorCode);
+        collationSize=swapFormatVersion4(ds, info.formatVersion[0], inData, length, outData, *pErrorCode);
     } else {
         collationSize=swapFormatVersion3(ds, inData, length, outData, pErrorCode);
     }

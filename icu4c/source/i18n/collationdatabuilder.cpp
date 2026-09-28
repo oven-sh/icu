@@ -1343,11 +1343,16 @@ U_CDECL_END
 
 U_CDECL_BEGIN
 
+struct CodePointTrieBuilder {
+    UMutableCPTrie *trie;
+    UErrorCode &errorCode;
+};
+
 static UBool U_CALLCONV
 enumRangeForCodePointTrie(const void *context, UChar32 start, UChar32 end, uint32_t value) {
-    UErrorCode errorCode = U_ZERO_ERROR;
-    umutablecptrie_setRange(static_cast<UMutableCPTrie *>(const_cast<void *>(context)), start, end, value, &errorCode);
-    return U_SUCCESS(errorCode);
+    const CodePointTrieBuilder *builder = static_cast<const CodePointTrieBuilder *>(context);
+    umutablecptrie_setRange(builder->trie, start, end, value, &builder->errorCode);
+    return U_SUCCESS(builder->errorCode);
 }
 
 U_CDECL_END
@@ -1357,7 +1362,8 @@ CollationDataBuilder::toCodePointTrie(const UTrie2 *trie, UErrorCode &errorCode)
     if(U_FAILURE(errorCode)) { return nullptr; }
     LocalUMutableCPTriePointer builder(umutablecptrie_open(trie->initialValue, trie->errorValue, &errorCode));
     if(U_FAILURE(errorCode)) { return nullptr; }
-    utrie2_enum(trie, nullptr, enumRangeForCodePointTrie, builder.getAlias());
+    CodePointTrieBuilder context = { builder.getAlias(), errorCode };
+    utrie2_enum(trie, nullptr, enumRangeForCodePointTrie, &context);
     // See CollationData::getCE32().
     for(UChar32 lead = 0xd800; lead < 0xdc00; ++lead) {
         U_ASSERT(utrie2_get32(trie, lead) == trie->initialValue);
@@ -1491,6 +1497,9 @@ CollationDataBuilder::buildSparseMappings(CollationMappings &mappings, UErrorCod
         mappings.rangeBits[rangeStart >> 14] |= uint64_t{1} << ((rangeStart >> 8) & 0x3f);
     }
     mappings.countRanges();
+    if(mappingIndex.isBogus() || mappingSpan16.isBogus() || mappingValues16.isBogus()) {
+        errorCode = U_MEMORY_ALLOCATION_ERROR;
+    }
     if(U_FAILURE(errorCode)) { return; }
     auto units = [](const UnicodeString &s) { return reinterpret_cast<const uint16_t *>(s.getBuffer()); };
     auto words = [](UVector32 &v) { return reinterpret_cast<const uint32_t *>(v.getBuffer()); };
@@ -1679,8 +1688,6 @@ CollationDataBuilder::buildMappings(CollationData &data, UErrorCode &errorCode) 
         buildSparseMappings(data.mappings, errorCode);
     }
     if(U_FAILURE(errorCode)) { return; }
-    data.base = base;
-    data.setRoot();
 
     data.ce32s = reinterpret_cast<const uint32_t *>(ce32s.getBuffer());
     data.ces = ce64s.getBuffer();
@@ -1691,6 +1698,7 @@ CollationDataBuilder::buildMappings(CollationData &data, UErrorCode &errorCode) 
     data.contextsLength = contexts.length();
 
     data.base = base;
+    data.setRoot();
     if(jamoIndex >= 0) {
         data.jamoCE32s = data.ce32s + jamoIndex;
     } else {

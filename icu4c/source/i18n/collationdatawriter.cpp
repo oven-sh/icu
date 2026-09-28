@@ -74,7 +74,7 @@ static const UDataInfo dataInfo = {
     0,
 
     { 0x55, 0x43, 0x6f, 0x6c },         // dataFormat="UCol"
-    { 5, 0, 0, 0 },                     // formatVersion
+    { 6, 0, 0, 0 },                     // formatVersion
     { 6, 3, 0, 0 }                      // dataVersion
 };
 
