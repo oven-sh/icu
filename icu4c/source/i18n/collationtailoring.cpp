@@ -28,7 +28,6 @@
 #include "uassert.h"
 #include "uhash.h"
 #include "umutex.h"
-#include "utrie2.h"
 
 U_NAMESPACE_BEGIN
 
@@ -60,7 +59,7 @@ CollationTailoring::~CollationTailoring() {
     delete builder;
     udata_close(memory);
     ures_close(bundle);
-    utrie2_close(trie);
+    ucptrie_close(trie);
     delete unsafeBackwardSet;
     uhash_close(maxExpansions);
     maxExpansionsInitOnce.reset();

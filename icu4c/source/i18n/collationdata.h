@@ -19,10 +19,12 @@
 #if !UCONFIG_NO_COLLATION
 
 #include "unicode/ucol.h"
+#include "unicode/ucptrie.h"
+#include "collationmappings.h"
 #include "unicode/uniset.h"
+#include "unicode/utf16.h"
 #include "collation.h"
 #include "normalizer2impl.h"
-#include "utrie2.h"
 
 struct UDataMemory;
 
@@ -49,7 +51,7 @@ struct U_I18N_API CollationData : public UMemory {
     static constexpr int32_t MAX_NUM_SCRIPT_RANGES = 256;
 
     CollationData(const Normalizer2Impl &nfc)
-            : trie(nullptr),
+            : trie(nullptr), root(nullptr), rootIndex(nullptr), rootValues(nullptr),
               ce32s(nullptr), ces(nullptr), contexts(nullptr), base(nullptr),
               jamoCE32s(nullptr),
               nfcImpl(nfc),
@@ -61,12 +63,42 @@ struct U_I18N_API CollationData : public UMemory {
               numScripts(0), scriptsIndex(nullptr), scriptStarts(nullptr), scriptStartsLength(0),
               rootElements(nullptr), rootElementsLength(0) {}
 
+    /*
+     * The trie is a UCPTRIE_TYPE_FAST one, so that a UTF-16 code unit is looked up in two steps and without a condition,
+     * as it was in the UTrie2 that ICU has here. Like that one it has, for a lead surrogate, the value of the code unit:
+     * a LEAD_SURROGATE_TAG CE32. A UCPTrie has no other place for the value of the code point, so that is not stored.
+     *
+     * Only the root data has a trie. A tailoring has mappings, of code points only.
+     */
+
     uint32_t getCE32(UChar32 c) const {
-        return UTRIE2_GET32(trie, c);
+        return U16_IS_LEAD(c) ? getCE32FromLeadSurrogateCodePoint() :
+            trie != nullptr ? UCPTRIE_FAST_GET(trie, UCPTRIE_32, c) : mappings.get(c);
     }
 
     uint32_t getCE32FromSupplementary(UChar32 c) const {
-        return UTRIE2_GET32_FROM_SUPP(trie, c);
+        return trie != nullptr ? UCPTRIE_FAST_SUPP_GET(trie, UCPTRIE_32, c) : mappings.get(c);
+    }
+
+
+    /**
+     * What the root data has, whether or not a tailoring maps c.
+     * @param c a code point of the BMP, or a UTF-16 code unit
+     */
+    uint32_t getCE32FromRootBMP(UChar32 c) const {
+        return rootValues[rootIndex[c >> 6] + (c & 0x3f)];
+    }
+
+    /** To be called once the trie and the base are set. */
+    void setRoot() {
+        root = base != nullptr ? base : this;
+        rootIndex = root->trie->index;
+        rootValues = root->trie->data.ptr32;
+    }
+
+    /** What nothing maps: the value that CollationDataBuilder starts the trie with. */
+    uint32_t getCE32FromLeadSurrogateCodePoint() const {
+        return base == nullptr ? Collation::UNASSIGNED_CE32 : Collation::FALLBACK_CE32;
     }
 
     UBool isDigit(UChar32 c) const {
@@ -167,8 +199,17 @@ struct U_I18N_API CollationData : public UMemory {
     /** @see jamoCE32s */
     static const int32_t JAMO_CE32S_LENGTH = 19 + 21 + 27;
 
-    /** Main lookup trie. */
-    const UTrie2 *trie;
+    /** Main lookup trie, of the root data. */
+    const UCPTrie *trie;
+    /** In place of it, of a tailoring. */
+    CollationMappings mappings;
+    /**
+     * The root data, which is the base or this, and the arrays of its trie.
+     * Here so that neither making a CollationIterator nor looking a character up has to go and find them.
+     */
+    const CollationData *root;
+    const uint16_t *rootIndex;
+    const uint32_t *rootValues;
     /**
      * Array of CE32 values.
      * At index 0 there must be CE32(U+0000)

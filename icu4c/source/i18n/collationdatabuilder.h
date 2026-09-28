@@ -153,6 +153,12 @@ public:
     void enableFastLatin() { fastLatinEnabled = true; }
     virtual void build(CollationData &data, UErrorCode &errorCode);
 
+    /** The trie of a CollationData, from the frozen trie that this class builds or that ICU's data has. */
+    static UCPTrie *toCodePointTrie(const UTrie2 *trie, UErrorCode &errorCode);
+
+    /** Sets the mappings of a tailoring from the trie. */
+    void buildSparseMappings(CollationMappings &mappings, UErrorCode &errorCode);
+
     /**
      * Looks up CEs for s and appends them to the ces array.
      * Does not handle normalization: s should be in FCD form.
@@ -237,6 +243,16 @@ protected:
     const CollationData *base;
     const CollationSettings *baseSettings;
     UTrie2 *trie;
+    /** What build() makes of trie, for the CollationData. */
+    UCPTrie *codePointTrie;
+    /** What the mappings of a tailoring point into. */
+    UVector64 mappingBlockBits;
+    UVector32 mappingSpan32;
+    UVector32 mappingBlockValues;
+    UVector32 mappingValues32;
+    UnicodeString mappingIndex;
+    UnicodeString mappingSpan16;
+    UnicodeString mappingValues16;
     UVector32 ce32s;
     UVector64 ce64s;
     UVector conditionalCE32s;  // vector of ConditionalCE32

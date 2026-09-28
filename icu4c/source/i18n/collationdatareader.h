@@ -177,7 +177,8 @@ private:
  *      that are either stored as part of the reorderCodes array
  *      or regenerated at load time.
  *
- * UTrie2 trie; -- see utrie2_impl.h and utrie2.h
+ * UCPTrie trie; -- see ucptrie_impl.h and ucptrie.h
+ * (oven-sh/icu. A UTrie2 in ICU, whose data/in/coll/ucadata-*.icu the tool convuca converted.)
  *      The trie holds the main collation data. Each code point is mapped to a 32-bit value.
  *      It encodes a simple collation element (CE) in compact form, unless bits 7..6 are both set,
  *      in which case it is a special CE32 and contains a 4-bit tag and further data.

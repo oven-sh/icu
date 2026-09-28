@@ -970,7 +970,15 @@ writeCollationDataTOML(const char* outputdir, const char* name, const char* coll
     uint32_t trieDefault = root ? icu::Collation::UNASSIGNED_CE32 : icu::Collation::FALLBACK_CE32;
     icu::LocalUMutableCPTriePointer builder(umutablecptrie_open(trieDefault, trieDefault, status));
 
-    utrie2_enum(data->trie, nullptr, &convertTrie, builder.getAlias());
+    {
+        UChar32 start = 0, end;
+        uint32_t value;
+        while ((end = ucptrie_getRange(data->trie, start, UCPMAP_RANGE_FIXED_LEAD_SURROGATES,
+                                       data->getCE32FromLeadSurrogateCodePoint(), nullptr, nullptr, &value)) >= 0 &&
+                convertTrie(builder.getAlias(), start, end, value)) {
+            start = end + 1;
+        }
+    }
 
     // If the diacritic table was cut short, copy CE32s between the lowered
     // limit and the max limit from the root to the tailoring. As of June 2022,

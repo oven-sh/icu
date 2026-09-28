@@ -384,8 +384,36 @@ swapFormatVersion4(const UDataSwapper *ds,
     index = IX_TRIE_OFFSET;
     offset = indexes[index];
     length = indexes[index + 1] - offset;
-    if(length > 0) {
-        utrie2_swap(ds, inBytes + offset, length, outBytes + offset, &errorCode);
+    if(length > 0 && indexes[IX_ROOT_ELEMENTS_OFFSET + 1] > indexes[IX_ROOT_ELEMENTS_OFFSET]) {
+        utrie_swapAnyVersion(ds, inBytes + offset, length, outBytes + offset, &errorCode);
+    } else if(length > 0 && ds->inIsBigEndian != ds->outIsBigEndian) {
+        // A tailoring: as CollationMappings::write() in i18n/collationdata.cpp writes it.
+        enum { RANGE_WORDS, INDEX, SPAN16, SPAN32, BLOCKS, VALUES32, VALUES16, LENGTHS_COUNT = 10 };
+        const uint8_t *in = inBytes + offset;
+        uint8_t *out = outBytes + offset;
+        int32_t lengths[LENGTHS_COUNT];
+        for(int32_t i = 0; i < LENGTHS_COUNT; ++i) {
+            lengths[i] = udata_readInt32(ds, reinterpret_cast<const int32_t *>(in)[i]);
+        }
+        // The 64-bit words are at multiples of 4.
+        auto swap = [&](int32_t width, int32_t count) {
+            for(; count > 0 && U_SUCCESS(errorCode); --count, in += width, out += width) {
+                uint8_t bytes[8];
+                for(int32_t i = 0; i < width; ++i) { bytes[i] = in[width - 1 - i]; }
+                uprv_memcpy(out, bytes, width);
+            }
+        };
+        swap(4, LENGTHS_COUNT);
+        for(int32_t i = 0; i < lengths[RANGE_WORDS]; ++i) {
+            swap(4, 1);
+            swap(8, 1);
+        }
+        swap(8, lengths[BLOCKS]);
+        swap(4, lengths[BLOCKS] + lengths[SPAN32] + lengths[VALUES32]);
+        swap(2, lengths[INDEX] + lengths[SPAN16] + lengths[VALUES16]);
+        if(in > inBytes + offset + length) {
+            errorCode = U_INDEX_OUTOFBOUNDS_ERROR;
+        }
     }
 
     index = IX_RESERVED8_OFFSET;

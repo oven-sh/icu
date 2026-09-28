@@ -88,8 +88,7 @@ private:
 
 public:
     CollationIterator(const CollationData *d, UBool numeric)
-            : trie(d->trie),
-              data(d),
+            : data(d),
               cesIndex(0),
               skipped(nullptr),
               numCpFwd(-1),
@@ -127,35 +126,17 @@ public:
         uint32_t ce32 = handleNextCE32(c, errorCode);
         uint32_t t = ce32 & 0xff;
         if(t < Collation::SPECIAL_CE32_LOW_BYTE) {  // Forced-inline of isSpecialCE32(ce32).
-            // Normal CE from the main data.
+            // Normal CE.
             // Forced-inline of ceFromSimpleCE32(ce32).
             return ceBuffer.set(cesIndex++,
                     (static_cast<int64_t>(ce32 & 0xffff0000) << 32) | ((ce32 & 0xff00) << 16) | (t << 8));
-        }
-        const CollationData *d;
-        // The compiler should be able to optimize the previous and the following
-        // comparisons of t with the same constant.
-        if(t == Collation::SPECIAL_CE32_LOW_BYTE) {
-            if(c < 0) {
-                return ceBuffer.set(cesIndex++, Collation::NO_CE);
-            }
-            d = data->base;
-            ce32 = d->getCE32(c);
-            t = ce32 & 0xff;
-            if(t < Collation::SPECIAL_CE32_LOW_BYTE) {
-                // Normal CE from the base data.
-                return ceBuffer.set(cesIndex++,
-                        (static_cast<int64_t>(ce32 & 0xffff0000) << 32) | ((ce32 & 0xff00) << 16) | (t << 8));
-            }
-        } else {
-            d = data;
         }
         if(t == Collation::LONG_PRIMARY_CE32_LOW_BYTE) {
             // Forced-inline of ceFromLongPrimaryCE32(ce32).
             return ceBuffer.set(cesIndex++,
                     (static_cast<int64_t>(ce32 - t) << 32) | Collation::COMMON_SEC_AND_TER_CE);
         }
-        return nextCEFromCE32(d, c, ce32, errorCode);
+        return nextCEFromSpecialCE32(c, ce32, errorCode);
     }
 
     /**
@@ -261,11 +242,33 @@ protected:
     void appendCEsFromCE32(const CollationData *d, UChar32 c, uint32_t ce32,
                            UBool forward, UErrorCode &errorCode);
 
-    // Main lookup trie of the data object.
-    const UTrie2 *trie;
+    /*
+     * What handleNextCE32() returns: the tailoring's CE32 for c if it maps c, else the root's, never FALLBACK_CE32.
+     * ICU returns the tailoring's, and nextCE() looks at the root data when that says to. This way text that
+     * the tailoring has nothing to say about, which is most, is looked up once, in as many steps as with the root collator.
+     */
+
+    /** @param c a code point of the BMP, or a UTF-16 code unit */
+    U_FORCE_INLINE uint32_t getCE32FromBMP(UChar32 c) {
+        return data->mappings.isInMappedRange(c) ? getCE32FromMappedRangeOfBMP(c) : data->getCE32FromRootBMP(c);
+    }
+
+    /** @param c a code point */
+    U_I18N_API uint32_t getCE32FromCodePoint(UChar32 c);
+
+    /**
+     * Whether the CE32 that handleNextCE32() returned refers to something in data rather than in the root data.
+     * Set only for a CE32 that does refer to something. nextCE() resets it.
+     */
+    UBool isFromMappings = false;
     const CollationData *data;
 
 private:
+    U_I18N_API uint32_t getCE32FromMappedRangeOfBMP(UChar32 c);
+
+    /** @param ce32 what handleNextCE32() returned, other than a long-primary CE32 */
+    U_I18N_API int64_t nextCEFromSpecialCE32(UChar32 c, uint32_t ce32, UErrorCode &errorCode);
+
     U_I18N_API int64_t nextCEFromCE32(const CollationData *d, UChar32 c, uint32_t ce32,
                                       UErrorCode &errorCode);
 

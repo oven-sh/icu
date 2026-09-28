@@ -31,7 +31,6 @@
 #include "normalizer2impl.h"
 #include "uassert.h"
 #include "ucmndata.h"
-#include "utrie2.h"
 
 U_NAMESPACE_BEGIN
 
@@ -167,10 +166,15 @@ CollationDataReader::read(const CollationTailoring *base, const uint8_t *inBytes
         data = tailoring.ownedData;
         data->base = baseData;
         data->numericPrimary = inIndexes[IX_OPTIONS] & 0xff000000;
-        data->trie = tailoring.trie = utrie2_openFromSerialized(
-            UTRIE2_32_VALUE_BITS, inBytes + offset, length, nullptr,
-            &errorCode);
+        if(baseData == nullptr) {
+            data->trie = tailoring.trie = ucptrie_openFromBinary(
+                UCPTRIE_TYPE_FAST, UCPTRIE_VALUE_BITS_32, inBytes + offset, length, nullptr,
+                &errorCode);
+        } else if(!data->mappings.read(inBytes + offset, length)) {
+            errorCode = U_INVALID_FORMAT_ERROR;
+        }
         if(U_FAILURE(errorCode)) { return; }
+        data->setRoot();
     } else if(baseData != nullptr) {
         // Use the base data. Only the settings are tailored.
         tailoring.data = baseData;

@@ -146,7 +146,6 @@ private:
 
 CollationIterator::CollationIterator(const CollationIterator &other)
         : UObject(other),
-          trie(other.trie),
           data(other.data),
           cesIndex(other.cesIndex),
           skipped(nullptr),
@@ -206,7 +205,41 @@ CollationIterator::fetchCEs(UErrorCode &errorCode) {
 uint32_t
 CollationIterator::handleNextCE32(UChar32 &c, UErrorCode &errorCode) {
     c = nextCodePoint(errorCode);
-    return (c < 0) ? Collation::FALLBACK_CE32 : data->getCE32(c);
+    return (c < 0) ? Collation::FALLBACK_CE32 : getCE32FromCodePoint(c);
+}
+
+uint32_t
+CollationIterator::getCE32FromMappedRangeOfBMP(UChar32 c) {
+    uint32_t ce32 = data->mappings.getFromMappedRangeInline(c);
+    if(ce32 == Collation::FALLBACK_CE32) {
+        return data->getCE32FromRootBMP(c);
+    }
+    isFromMappings = (ce32 & 0xff) > Collation::LONG_PRIMARY_CE32_LOW_BYTE;
+    return ce32;
+}
+
+int64_t
+CollationIterator::nextCEFromSpecialCE32(UChar32 c, uint32_t ce32, UErrorCode &errorCode) {
+    if(ce32 == Collation::FALLBACK_CE32) {
+        U_ASSERT(c < 0);
+        return ceBuffer.set(cesIndex++, Collation::NO_CE);
+    }
+    const CollationData *d = data->root;
+    if(isFromMappings) {
+        d = data;
+        isFromMappings = false;
+    }
+    return nextCEFromCE32(d, c, ce32, errorCode);
+}
+
+uint32_t
+CollationIterator::getCE32FromCodePoint(UChar32 c) {
+    uint32_t ce32 = data->getCE32(c);
+    if(ce32 == Collation::FALLBACK_CE32) {
+        return data->root->getCE32(c);
+    }
+    isFromMappings = data != data->root && (ce32 & 0xff) > Collation::LONG_PRIMARY_CE32_LOW_BYTE;
+    return ce32;
 }
 
 char16_t
@@ -411,13 +444,16 @@ CollationIterator::appendCEsFromCE32(const CollationData *d, UChar32 c, uint32_t
             char16_t trail;
             if(U16_IS_TRAIL(trail = handleGetTrailSurrogate())) {
                 c = U16_GET_SUPPLEMENTARY(c, trail);
-                ce32 &= Collation::LEAD_TYPE_MASK;
-                if(ce32 == Collation::LEAD_ALL_UNASSIGNED) {
+                // Only the root data has CE32s for lead surrogates. What they say is about the root data.
+                U_ASSERT(d->base == nullptr);
+                uint32_t tailoredCE32 =
+                    data->mappings.isInMappedRange(c) ? data->mappings.getFromMappedRange(c) : Collation::FALLBACK_CE32;
+                if(tailoredCE32 != Collation::FALLBACK_CE32) {
+                    d = data;
+                    ce32 = tailoredCE32;
+                } else if((ce32 & Collation::LEAD_TYPE_MASK) == Collation::LEAD_ALL_UNASSIGNED) {
                     ce32 = Collation::UNASSIGNED_CE32;  // unassigned-implicit
-                } else if(ce32 == Collation::LEAD_ALL_FALLBACK ||
-                        (ce32 = d->getCE32FromSupplementary(c)) == Collation::FALLBACK_CE32) {
-                    // fall back to the base data
-                    d = d->base;
+                } else {
                     ce32 = d->getCE32FromSupplementary(c);
                 }
             } else {

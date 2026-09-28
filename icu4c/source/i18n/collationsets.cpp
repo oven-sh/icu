@@ -25,9 +25,28 @@
 #include "normalizer2impl.h"
 #include "uassert.h"
 #include "utf16collationiterator.h"
-#include "utrie2.h"
 
 U_NAMESPACE_BEGIN
+
+namespace {
+
+/** The values of code points, so not what the trie has for lead surrogates. */
+void enumRanges(const CollationData *data,
+                UBool U_CALLCONV fn(const void *context, UChar32 start, UChar32 end, uint32_t ce32), const void *context) {
+    if(data->trie == nullptr) {
+        data->mappings.forEachCodePoint([=](UChar32 c, uint32_t ce32) { return fn(context, c, c, ce32); });
+        return;
+    }
+    UChar32 start = 0, end;
+    uint32_t ce32;
+    while((end = ucptrie_getRange(data->trie, start, UCPMAP_RANGE_FIXED_LEAD_SURROGATES,
+                                  data->getCE32FromLeadSurrogateCodePoint(), nullptr, nullptr, &ce32)) >= 0 &&
+            fn(context, start, end, ce32)) {
+        start = end + 1;
+    }
+}
+
+}  // namespace
 
 U_CDECL_BEGIN
 
@@ -49,7 +68,7 @@ TailoredSet::forData(const CollationData *d, UErrorCode &ec) {
     data = d;
     baseData = d->base;
     U_ASSERT(baseData != nullptr);
-    utrie2_enum(data->trie, nullptr, enumTailoredRange, this);
+    enumRanges(data, enumTailoredRange, this);
     ec = errorCode;
 }
 
@@ -397,7 +416,7 @@ ContractionsAndExpansions::forData(const CollationData *d, UErrorCode &ec) {
         checkTailored = -1;
     }
     data = d;
-    utrie2_enum(data->trie, nullptr, enumCnERange, this);
+    enumRanges(data, enumCnERange, this);
     if(d->base == nullptr || U_FAILURE(errorCode)) {
         ec = errorCode;
         return;
@@ -406,7 +425,7 @@ ContractionsAndExpansions::forData(const CollationData *d, UErrorCode &ec) {
     tailored.freeze();
     checkTailored = 1;
     data = d->base;
-    utrie2_enum(data->trie, nullptr, enumCnERange, this);
+    enumRanges(data, enumCnERange, this);
     ec = errorCode;
 }
 

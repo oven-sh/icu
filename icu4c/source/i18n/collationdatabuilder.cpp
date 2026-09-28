@@ -19,6 +19,8 @@
 
 #include "unicode/localpointer.h"
 #include "unicode/uchar.h"
+#include "unicode/ucptrie.h"
+#include "unicode/umutablecptrie.h"
 #include "unicode/ucharstrie.h"
 #include "unicode/ucharstriebuilder.h"
 #include "unicode/uniset.h"
@@ -299,7 +301,9 @@ DataBuilderCollationIterator::getCE32FromBuilderData(uint32_t ce32, UErrorCode &
 CollationDataBuilder::CollationDataBuilder(UBool icu4xMode, UErrorCode &errorCode)
         : nfcImpl(*Normalizer2Factory::getNFCImpl(errorCode)),
           base(nullptr), baseSettings(nullptr),
-          trie(nullptr),
+          trie(nullptr), codePointTrie(nullptr),
+          mappingBlockBits(errorCode), mappingSpan32(errorCode),
+          mappingBlockValues(errorCode), mappingValues32(errorCode),
           ce32s(errorCode), ce64s(errorCode), conditionalCE32s(errorCode),
           modified(false),
           icu4xMode(icu4xMode),
@@ -314,6 +318,7 @@ CollationDataBuilder::CollationDataBuilder(UBool icu4xMode, UErrorCode &errorCod
 
 CollationDataBuilder::~CollationDataBuilder() {
     utrie2_close(trie);
+    ucptrie_close(codePointTrie);
     delete fastLatinBuilder;
     delete collIter;
 }
@@ -1336,6 +1341,176 @@ enumRangeLeadValue(const void *context, UChar32 /*start*/, UChar32 /*end*/, uint
 
 U_CDECL_END
 
+U_CDECL_BEGIN
+
+static UBool U_CALLCONV
+enumRangeForCodePointTrie(const void *context, UChar32 start, UChar32 end, uint32_t value) {
+    UErrorCode errorCode = U_ZERO_ERROR;
+    umutablecptrie_setRange(static_cast<UMutableCPTrie *>(const_cast<void *>(context)), start, end, value, &errorCode);
+    return U_SUCCESS(errorCode);
+}
+
+U_CDECL_END
+
+UCPTrie *
+CollationDataBuilder::toCodePointTrie(const UTrie2 *trie, UErrorCode &errorCode) {
+    if(U_FAILURE(errorCode)) { return nullptr; }
+    LocalUMutableCPTriePointer builder(umutablecptrie_open(trie->initialValue, trie->errorValue, &errorCode));
+    if(U_FAILURE(errorCode)) { return nullptr; }
+    utrie2_enum(trie, nullptr, enumRangeForCodePointTrie, builder.getAlias());
+    // See CollationData::getCE32().
+    for(UChar32 lead = 0xd800; lead < 0xdc00; ++lead) {
+        U_ASSERT(utrie2_get32(trie, lead) == trie->initialValue);
+        umutablecptrie_set(builder.getAlias(), lead, utrie2_get32FromLeadSurrogateCodeUnit(trie, lead), &errorCode);
+    }
+    return umutablecptrie_buildImmutable(builder.getAlias(), UCPTRIE_TYPE_FAST, UCPTRIE_VALUE_BITS_32, &errorCode);
+}
+
+void
+CollationDataBuilder::buildSparseMappings(CollationMappings &mappings, UErrorCode &errorCode) {
+    if(U_FAILURE(errorCode)) { return; }
+    auto get = [this](UChar32 c) { return utrie2_get32(trie, c); };
+    mappings = CollationMappings();
+    int32_t *lengths = mappings.lengths;
+
+    // The longest stretch of the BMP where a quarter of each 1024 code points have 16-bit values.
+    // It takes more bytes than blocks where less than most have, but this is what the language is written in.
+    UChar32 span16Start = 0, span16Limit = 0;
+    for(UChar32 start = 0, c = 0; c <= 0x10000; c += 0x400) {
+        int32_t count = 0;
+        for(int32_t i = 0; i < 0x400 && c <= 0xffff; ++i) {
+            if(CollationMappings::isNarrow(get(c + i))) { ++count; }
+        }
+        if(count >= 0x100) { continue; }
+        if(c - start > span16Limit - span16Start) {
+            span16Start = start;
+            span16Limit = c;
+        }
+        start = c + 0x400;
+    }
+    // Other CE32s in it are found by a small index.
+    int32_t others = 0;
+    for(UChar32 c = span16Start; c < span16Limit; ++c) {
+        uint32_t ce32 = get(c);
+        if(ce32 != Collation::FALLBACK_CE32 && !CollationMappings::isNarrow(ce32)) { ++others; }
+    }
+    if(others >= static_cast<int32_t>(CollationMappings::MIN_NARROW) - 1) { span16Limit = span16Start; }
+    for(UChar32 c = span16Start; c < span16Limit; ++c) {
+        uint32_t ce32 = get(c);
+        if(ce32 == Collation::FALLBACK_CE32) {
+            mappingSpan16.append(static_cast<char16_t>(0));
+        } else if(CollationMappings::isNarrow(ce32)) {
+            mappingSpan16.append(static_cast<char16_t>(ce32 >> 16));
+        } else {
+            mappingValues32.addElement(static_cast<int32_t>(ce32), errorCode);
+            mappingSpan16.append(static_cast<char16_t>(mappingValues32.size()));
+        }
+    }
+
+    // The longest stretch of the rest of the BMP where half of each 64 code points are mapped, if that is a few blocks.
+    // Not to the same CE32, which a block has once.
+    UChar32 span32Start = 0, span32Limit = 0;
+    for(UChar32 start = 0, c = 0; c <= 0x10000; c += 0x40) {
+        int32_t count = 0;
+        UBool same = true;
+        for(int32_t i = 0; i < 0x40 && c <= 0xffff && (c < span16Start || span16Limit <= c); ++i) {
+            uint32_t ce32 = get(c + i);
+            if(ce32 == Collation::FALLBACK_CE32) { continue; }
+            ++count;
+            same = same && ce32 == get(c + i - (i != 0 && get(c + i - 1) != Collation::FALLBACK_CE32 ? 1 : 0));
+        }
+        if(count >= 0x20 && !same) { continue; }
+        if(c - start > span32Limit - span32Start) {
+            span32Start = start;
+            span32Limit = c;
+        }
+        start = c + 0x40;
+    }
+    if(span32Limit - span32Start < 3 * 0x40) { span32Limit = span32Start; }
+    for(UChar32 c = span32Start; c < span32Limit; ++c) {
+        mappingSpan32.addElement(static_cast<int32_t>(get(c)), errorCode);
+    }
+
+    for(UChar32 rangeStart = 0; rangeStart <= 0x10ffff; rangeStart += 0x100) {
+        char16_t entries[4];
+        UBool isMapped = false;
+        for(int32_t b = 0; b < 4; ++b) {
+            UChar32 blockStart = rangeStart + (b << 6);
+            UBool inSpan = (span16Start <= blockStart && blockStart < span16Limit) ||
+                (span32Start <= blockStart && blockStart < span32Limit);
+            uint32_t values[64];
+            int32_t length = 0;
+            uint64_t bits = 0;
+            UBool narrow = true, same = true;
+            for(int32_t i = 0; i < 64; ++i) {
+                uint32_t ce32 = get(blockStart + i);
+                if(ce32 == Collation::FALLBACK_CE32) { continue; }
+                bits |= uint64_t{1} << i;
+                values[length++] = ce32;
+                narrow = narrow && CollationMappings::isNarrow(ce32);
+                same = same && ce32 == values[0];
+            }
+            entries[b] = 0;
+            if(length == 0) { continue; }
+            isMapped = true;
+            if(inSpan) { continue; }
+            mappingBlockBits.addElement(static_cast<int64_t>(bits), errorCode);
+            if(mappingBlockBits.size() > 0xffff) {
+                errorCode = U_BUFFER_OVERFLOW_ERROR;
+                return;
+            }
+            entries[b] = static_cast<char16_t>(mappingBlockBits.size());
+            uint32_t first = narrow ? mappingValues16.length() : mappingValues32.size();
+            if(same) {
+                // The block before this one may have the same one.
+                length = 1;
+                if(first != 0 && values[0] == (narrow ? CollationMappings::widen(mappingValues16[first - 1]) :
+                                                        static_cast<uint32_t>(mappingValues32.elementAti(first - 1)))) {
+                    --first;
+                    length = 0;
+                }
+            }
+            for(int32_t i = 0; i < length; ++i) {
+                if(narrow) {
+                    mappingValues16.append(static_cast<char16_t>(values[i] >> 16));
+                } else {
+                    mappingValues32.addElement(static_cast<int32_t>(values[i]), errorCode);
+                }
+            }
+            if(first > CollationMappings::MAX_VALUE_INDEX) {
+                errorCode = U_BUFFER_OVERFLOW_ERROR;
+                return;
+            }
+            mappingBlockValues.addElement(
+                static_cast<int32_t>(first | (narrow ? CollationMappings::NARROW : 0) |
+                                     (same ? CollationMappings::SAME : 0)),
+                errorCode);
+        }
+        if(!isMapped) { continue; }
+        mappingIndex.append(entries, 4);
+        mappings.rangeBits[rangeStart >> 14] |= uint64_t{1} << ((rangeStart >> 8) & 0x3f);
+    }
+    mappings.countRanges();
+    if(U_FAILURE(errorCode)) { return; }
+    auto units = [](const UnicodeString &s) { return reinterpret_cast<const uint16_t *>(s.getBuffer()); };
+    auto words = [](UVector32 &v) { return reinterpret_cast<const uint32_t *>(v.getBuffer()); };
+    mappings.index = units(mappingIndex);
+    mappings.span16 = units(mappingSpan16);
+    mappings.span32 = words(mappingSpan32);
+    mappings.blockBits = reinterpret_cast<const uint8_t *>(mappingBlockBits.getBuffer());
+    mappings.blockValues = words(mappingBlockValues);
+    mappings.values32 = words(mappingValues32);
+    mappings.values16 = units(mappingValues16);
+    lengths[CollationMappings::INDEX_LENGTH] = mappingIndex.length();
+    lengths[CollationMappings::SPAN16_LENGTH] = mappingSpan16.length();
+    lengths[CollationMappings::SPAN32_LENGTH] = mappingSpan32.size();
+    lengths[CollationMappings::BLOCKS_LENGTH] = mappingBlockBits.size();
+    lengths[CollationMappings::VALUES32_LENGTH] = mappingValues32.size();
+    lengths[CollationMappings::VALUES16_LENGTH] = mappingValues16.length();
+    lengths[CollationMappings::SPAN16_START] = span16Start;
+    lengths[CollationMappings::SPAN32_START] = span32Start;
+}
+
 void
 CollationDataBuilder::setLeadSurrogates(UErrorCode &errorCode) {
     for(char16_t lead = 0xd800; lead < 0xdc00; ++lead) {
@@ -1405,15 +1580,9 @@ CollationDataBuilder::buildMappings(CollationData &data, UErrorCode &errorCode) 
             c = limit;
         }
     } else {
-        // Copy the Hangul CE32s from the base in blocks per Jamo L,
-        // assuming that HANGUL_NO_SPECIAL_JAMO is set or not set for whole blocks.
-        for(UChar32 c = Hangul::HANGUL_BASE; c < Hangul::HANGUL_LIMIT;) {
-            uint32_t ce32 = base->getCE32(c);
-            U_ASSERT(Collation::hasCE32Tag(ce32, Collation::HANGUL_TAG));
-            UChar32 limit = c + Hangul::JAMO_VT_COUNT;
-            utrie2_setRange32(trie, c, limit - 1, ce32, true, &errorCode);
-            c = limit;
-        }
+        // The base's Hangul CE32s do, with its Jamo CE32s. ICU copies them for speed,
+        // but CollationMappings says that a tailoring does not map Hangul sooner than it would find a copy.
+        utrie2_setRange32(trie, Hangul::HANGUL_BASE, Hangul::HANGUL_END, Collation::FALLBACK_CE32, true, &errorCode);
     }
 
     setDigitTags(errorCode);
@@ -1483,8 +1652,12 @@ CollationDataBuilder::buildMappings(CollationData &data, UErrorCode &errorCode) 
         }
     } else {
         // For U+0000, move its normal ce32 into CE32s[0] and set U0000_TAG.
-        ce32s.setElementAt(static_cast<int32_t>(utrie2_get32(trie, 0)), 0);
-        utrie2_set32(trie, 0, Collation::makeCE32FromTagAndIndex(Collation::U0000_TAG, 0), &errorCode);
+        // Not in a tailoring that does not map it: the base's does the same.
+        uint32_t ce32 = utrie2_get32(trie, 0);
+        if(ce32 != Collation::FALLBACK_CE32) {
+            ce32s.setElementAt(static_cast<int32_t>(ce32), 0);
+            utrie2_set32(trie, 0, Collation::makeCE32FromTagAndIndex(Collation::U0000_TAG, 0), &errorCode);
+        }
     }
 
     utrie2_freeze(trie, UTRIE2_32_VALUE_BITS, &errorCode);
@@ -1500,7 +1673,15 @@ CollationDataBuilder::buildMappings(CollationData &data, UErrorCode &errorCode) 
     }
     unsafeBackwardSet.freeze();
 
-    data.trie = trie;
+    if(base == nullptr) {
+        data.trie = codePointTrie = toCodePointTrie(trie, errorCode);
+    } else {
+        buildSparseMappings(data.mappings, errorCode);
+    }
+    if(U_FAILURE(errorCode)) { return; }
+    data.base = base;
+    data.setRoot();
+
     data.ce32s = reinterpret_cast<const uint32_t *>(ce32s.getBuffer());
     data.ces = ce64s.getBuffer();
     data.contexts = contexts.getBuffer();

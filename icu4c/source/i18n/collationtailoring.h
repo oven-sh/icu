@@ -29,7 +29,7 @@
 
 struct UDataMemory;
 struct UResourceBundle;
-struct UTrie2;
+struct UCPTrie;
 
 U_NAMESPACE_BEGIN
 
@@ -83,7 +83,7 @@ struct U_I18N_API_CLASS CollationTailoring : public SharedObject {
     UObject *builder;
     UDataMemory *memory;
     UResourceBundle *bundle;
-    UTrie2 *trie;
+    UCPTrie *trie;
     UnicodeSet *unsafeBackwardSet;
     mutable UHashtable *maxExpansions;
     mutable UInitOnce maxExpansionsInitOnce;
