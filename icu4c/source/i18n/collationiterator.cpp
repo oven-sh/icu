@@ -210,7 +210,8 @@ CollationIterator::handleNextCE32(UChar32 &c, UErrorCode &errorCode) {
 
 uint32_t
 CollationIterator::getCE32FromMappedRangeOfBMP(UChar32 c) {
-    uint32_t ce32 = data->mappings.getFromMappedRangeInline(c);
+    uint32_t place = data->mappings.bmpBlocks[c >> 6];
+    uint32_t ce32 = place == 0 ? Collation::FALLBACK_CE32 : data->mappings.getFromBMPInline(c, place);
     if(ce32 == Collation::FALLBACK_CE32) {
         return data->getCE32FromRootBMP(c);
     }

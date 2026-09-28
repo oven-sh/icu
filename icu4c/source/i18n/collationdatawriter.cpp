@@ -251,24 +251,19 @@ CollationDataWriter::write(UBool isBase, const UVersionInfo dataVersion,
                 data.mappings.write(dest + totalSize);
             }
         } else if(totalSize < capacity) {
-            length = ucptrie_toBinary(data.trie, dest + totalSize,
+            length = utrie2_serialize(data.trie, dest + totalSize,
                                       capacity - totalSize, &errorCode2);
         } else {
-            length = ucptrie_toBinary(data.trie, nullptr, 0, &errorCode2);
+            length = utrie2_serialize(data.trie, nullptr, 0, &errorCode2);
         }
         if(U_FAILURE(errorCode2) && errorCode2 != U_BUFFER_OVERFLOW_ERROR) {
             errorCode = errorCode2;
             return 0;
         }
+        // The trie size should be a multiple of 8 bytes due to the way
+        // compactIndex2(UNewTrie2 *trie) currently works.
+        U_ASSERT((length & 7) == 0);
         totalSize += length;
-        // The 64-bit CEs follow.
-        U_ASSERT((length & 3) == 0);
-        if((length & 7) != 0) {
-            if(totalSize + 4 <= capacity) {
-                uprv_memset(dest + totalSize, 0, 4);
-            }
-            totalSize += 4;
-        }
     }
 
     indexes[CollationDataReader::IX_RESERVED8_OFFSET] = totalSize;

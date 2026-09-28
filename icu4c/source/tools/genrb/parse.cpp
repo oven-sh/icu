@@ -979,13 +979,7 @@ writeCollationDataTOML(const char* outputdir, const char* name, const char* coll
             return convertTrie(builder.getAlias(), c, c, ce32);
         });
     } else {
-        UChar32 start = 0, end;
-        uint32_t value;
-        while ((end = ucptrie_getRange(data->trie, start, UCPMAP_RANGE_FIXED_LEAD_SURROGATES,
-                                       data->getCE32FromLeadSurrogateCodePoint(), nullptr, nullptr, &value)) >= 0 &&
-                convertTrie(builder.getAlias(), start, end, value)) {
-            start = end + 1;
-        }
+        utrie2_enum(data->trie, nullptr, &convertTrie, builder.getAlias());
     }
 
     // If the diacritic table was cut short, copy CE32s between the lowered

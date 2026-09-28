@@ -386,10 +386,8 @@ swapFormatVersion4(const UDataSwapper *ds, int32_t formatVersion,
     length = indexes[index + 1] - offset;
     if(length > 0 && formatVersion < 6) {
         utrie2_swap(ds, inBytes + offset, length, outBytes + offset, &errorCode);
-    } else if(length > 0 && indexes[IX_ROOT_ELEMENTS_OFFSET + 1] > indexes[IX_ROOT_ELEMENTS_OFFSET]) {
-        ucptrie_swap(ds, inBytes + offset, length, outBytes + offset, &errorCode);
     } else if(length > 0 && ds->inIsBigEndian != ds->outIsBigEndian) {
-        // A tailoring: see CollationMappings::write() in i18n/collationmappings.h.
+        // See CollationMappings::write() in i18n/collationmappings.h.
         enum { RANGE_WORDS, INDEX, SPAN16, SPAN32, BLOCKS, VALUES32, VALUES16, COUNTS_LIMIT, LENGTHS_COUNT = 10 };
         const uint8_t *in = inBytes + offset;
         uint8_t *out = outBytes + offset;

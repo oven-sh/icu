@@ -17,6 +17,7 @@ U_NAMESPACE_BEGIN
 
 /**
  * The mappings of a tailoring, from code points to CE32s. The root data has a trie for this, and so has ICU here.
+ * (The root's is ICU's: it is one, it maps most of Unicode, and all text that no tailoring maps is looked up in it.)
  *
  * A tailoring maps few code points, a few dozen as a rule, and a trie that is as fast as the root's takes kilobytes
  * however few they are: for its index, and for blocks of values that are mostly not there. This is such a trie,
@@ -32,10 +33,13 @@ U_NAMESPACE_BEGIN
  * There bits save little, and text consists of what is mapped. So there can be one span of code points
  * that has a value for each, which one step finds. Most such values are a two-byte primary weight with common secondary
  * and tertiary weights, and the span has 16 bits for each. Blocks that have only such values do too.
- * There can be another span with whole CE32s, as for Kana.
+ * There can be another span with whole CE32s.
  *
  * How a code point is looked up depends on what part of Unicode it is in, not on its block:
  * a processor predicts what is the same for all of a script, and takes long to recover where it cannot.
+ *
+ * Text that a tailoring does map is what its language is written in, so finding a block must not take long either.
+ * For the BMP, bmpBlocks says where each is. That is made when the data is loaded, and takes 2 kB of memory, not of data.
  *
  * Unlike the root's trie, this has nothing for a lead surrogate as a code unit.
  */
@@ -81,6 +85,18 @@ struct CollationMappings {
     const uint32_t *values32 = nullptr;
     const uint16_t *values16 = nullptr;
 
+    /** In bmpBlocks: all 64 code points are in span16, or in span32. */
+    static constexpr uint16_t IN_SPAN16 = 0xffff;
+    static constexpr uint16_t IN_SPAN32 = 0xfffe;
+    /** In bmpBlocks: some of the 64 code points are in a span. */
+    static constexpr uint16_t PARTLY_IN_SPAN = 0xfffd;
+    static constexpr int32_t MAX_BLOCKS = 0xfffc;
+    /**
+     * Not in the data: where to look for the code points of the BMP, which most text consists of, in one step.
+     * For each 64 of them, 0 if none is mapped, the index of their block plus 1, or one of the constants.
+     */
+    uint16_t bmpBlocks[0x10000 >> 6] = {};
+
     enum {
         /** The number of rangeBits that are not 0. Only those are written, each after its index. */
         RANGE_WORDS_LENGTH,
@@ -124,14 +140,27 @@ struct CollationMappings {
         int32_t word = c >> 14;
         int32_t range = rangesBefore[word] + countBits(rangeBits[word] & ((uint64_t{1} << ((c >> 8) & 0x3f)) - 1));
         int32_t block = index[(range << 2) + ((c >> 6) & 3)];
-        if(block-- == 0) { return Collation::FALLBACK_CE32; }
+        return block == 0 ? Collation::FALLBACK_CE32 : getFromBlock(block - 1, c);
+    }
+
+    U_FORCE_INLINE uint32_t getFromBlock(int32_t block, UChar32 c) const {
         uint64_t bits;
         uprv_memcpy(&bits, blockBits + block * 8, 8);
-        i = c & 0x3f;
+        uint32_t i = c & 0x3f;
         if(((bits >> i) & 1) == 0) { return Collation::FALLBACK_CE32; }
         uint32_t first = blockValues[block];
         i = (first & MAX_VALUE_INDEX) + ((first & SAME) != 0 ? 0 : countBits(bits & ((uint64_t{1} << i) - 1)));
         return (first & NARROW) != 0 ? widen(values16[i]) : values32[i];
+    }
+
+    /** @param place bmpBlocks[c >> 6], not 0 */
+    U_FORCE_INLINE uint32_t getFromBMPInline(UChar32 c, uint32_t place) const {
+        if(place <= static_cast<uint32_t>(MAX_BLOCKS)) { return getFromBlock(place - 1, c); }
+        if(place == IN_SPAN16) {
+            uint32_t value = span16[c - lengths[SPAN16_START]];
+            return value >= MIN_NARROW ? widen(value) : value == 0 ? Collation::FALLBACK_CE32 : values32[value - 1];
+        }
+        return place == IN_SPAN32 ? span32[c - lengths[SPAN32_START]] : getFromMappedRangeInline(c);
     }
 
     /*
@@ -158,6 +187,9 @@ struct CollationMappings {
 
     /** Sets rangesBefore and RANGE_WORDS_LENGTH from rangeBits. @return the number of ranges */
     U_I18N_API int32_t countRanges();
+
+    /** Sets bmpBlocks from all else. */
+    U_I18N_API void setBMPBlocks();
 
     /** The number of bytes that write() writes, a multiple of 8. INT32_MAX if that is too many. */
     U_I18N_API int32_t getBinaryLength() const;

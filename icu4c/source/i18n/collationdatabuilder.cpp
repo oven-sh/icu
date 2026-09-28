@@ -19,8 +19,6 @@
 
 #include "unicode/localpointer.h"
 #include "unicode/uchar.h"
-#include "unicode/ucptrie.h"
-#include "unicode/umutablecptrie.h"
 #include "unicode/ucharstrie.h"
 #include "unicode/ucharstriebuilder.h"
 #include "unicode/uniset.h"
@@ -301,7 +299,7 @@ DataBuilderCollationIterator::getCE32FromBuilderData(uint32_t ce32, UErrorCode &
 CollationDataBuilder::CollationDataBuilder(UBool icu4xMode, UErrorCode &errorCode)
         : nfcImpl(*Normalizer2Factory::getNFCImpl(errorCode)),
           base(nullptr), baseSettings(nullptr),
-          trie(nullptr), codePointTrie(nullptr),
+          trie(nullptr),
           mappingBlockBits(errorCode), mappingSpan32(errorCode),
           mappingBlockValues(errorCode), mappingValues32(errorCode),
           ce32s(errorCode), ce64s(errorCode), conditionalCE32s(errorCode),
@@ -318,7 +316,6 @@ CollationDataBuilder::CollationDataBuilder(UBool icu4xMode, UErrorCode &errorCod
 
 CollationDataBuilder::~CollationDataBuilder() {
     utrie2_close(trie);
-    ucptrie_close(codePointTrie);
     delete fastLatinBuilder;
     delete collIter;
 }
@@ -1341,37 +1338,6 @@ enumRangeLeadValue(const void *context, UChar32 /*start*/, UChar32 /*end*/, uint
 
 U_CDECL_END
 
-U_CDECL_BEGIN
-
-struct CodePointTrieBuilder {
-    UMutableCPTrie *trie;
-    UErrorCode &errorCode;
-};
-
-static UBool U_CALLCONV
-enumRangeForCodePointTrie(const void *context, UChar32 start, UChar32 end, uint32_t value) {
-    const CodePointTrieBuilder *builder = static_cast<const CodePointTrieBuilder *>(context);
-    umutablecptrie_setRange(builder->trie, start, end, value, &builder->errorCode);
-    return U_SUCCESS(builder->errorCode);
-}
-
-U_CDECL_END
-
-UCPTrie *
-CollationDataBuilder::toCodePointTrie(const UTrie2 *trie, UErrorCode &errorCode) {
-    if(U_FAILURE(errorCode)) { return nullptr; }
-    LocalUMutableCPTriePointer builder(umutablecptrie_open(trie->initialValue, trie->errorValue, &errorCode));
-    if(U_FAILURE(errorCode)) { return nullptr; }
-    CodePointTrieBuilder context = { builder.getAlias(), errorCode };
-    utrie2_enum(trie, nullptr, enumRangeForCodePointTrie, &context);
-    // See CollationData::getCE32().
-    for(UChar32 lead = 0xd800; lead < 0xdc00; ++lead) {
-        U_ASSERT(utrie2_get32(trie, lead) == trie->initialValue);
-        umutablecptrie_set(builder.getAlias(), lead, utrie2_get32FromLeadSurrogateCodeUnit(trie, lead), &errorCode);
-    }
-    return umutablecptrie_buildImmutable(builder.getAlias(), UCPTRIE_TYPE_FAST, UCPTRIE_VALUE_BITS_32, &errorCode);
-}
-
 void
 CollationDataBuilder::buildSparseMappings(CollationMappings &mappings, UErrorCode &errorCode) {
     if(U_FAILURE(errorCode)) { return; }
@@ -1518,6 +1484,11 @@ CollationDataBuilder::buildSparseMappings(CollationMappings &mappings, UErrorCod
     lengths[CollationMappings::VALUES16_LENGTH] = mappingValues16.length();
     lengths[CollationMappings::SPAN16_START] = span16Start;
     lengths[CollationMappings::SPAN32_START] = span32Start;
+    if(lengths[CollationMappings::BLOCKS_LENGTH] > CollationMappings::MAX_BLOCKS) {
+        errorCode = U_BUFFER_OVERFLOW_ERROR;
+        return;
+    }
+    mappings.setBMPBlocks();
 }
 
 void
@@ -1683,7 +1654,7 @@ CollationDataBuilder::buildMappings(CollationData &data, UErrorCode &errorCode) 
     unsafeBackwardSet.freeze();
 
     if(base == nullptr) {
-        data.trie = codePointTrie = toCodePointTrie(trie, errorCode);
+        data.trie = trie;
     } else {
         buildSparseMappings(data.mappings, errorCode);
     }

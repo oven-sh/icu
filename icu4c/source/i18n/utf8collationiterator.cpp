@@ -47,7 +47,7 @@ UTF8CollationIterator::handleNextCE32(UChar32 &c, UErrorCode & /*errorCode*/) {
         c = U_SENTINEL;
         return Collation::FALLBACK_CE32;
     }
-    // Optimized combination of U8_NEXT_OR_FFFD() and UCPTRIE_FAST_U8_NEXT().
+    // Optimized combination of U8_NEXT_OR_FFFD() and UTRIE2_U8_NEXT32().
     c = u8[pos++];
     if(U8_IS_SINGLE(c)) {
         // ASCII 00..7F
