@@ -116,7 +116,6 @@ private:
     UDataMemory *file;
 };
 
-// Implementation of the DictionaryMatcher interface for a BytesTrie dictionary
 /**
  * oven-sh/icu: A dictionary with values of 0..255, in about half of what it takes as a UCharsTrie.
  * Written by bun/data/icu-dict.ts from what gendict --uchars writes.
@@ -137,6 +136,8 @@ private:
  *   There are 8 more bytes than nodes.
  * - Block blocks[]: for each 64 nodes, and one more whose isLast is all ones
  * - uint8_t values[]: for each node that is a word, in the order of the nodes
+ *
+ * It is little-endian: nothing writes it otherwise, and udict_swap() does not swap it.
  */
 class U_COMMON_API SuccinctDictionaryMatcher : public DictionaryMatcher {
 public:
@@ -174,6 +175,7 @@ private:
     UDataMemory *file;
 };
 
+// Implementation of the DictionaryMatcher interface for a BytesTrie dictionary
 class U_COMMON_API BytesDictionaryMatcher : public DictionaryMatcher {
 public:
     // constructs a new BytesTrieDictionaryMatcher
@@ -205,6 +207,7 @@ udict_swap(const UDataSwapper *ds, const void *inData, int32_t length, void *out
  *
  * A dictionary .dict data file contains a byte-serialized BytesTrie or
  * a UChars-serialized UCharsTrie.
+ * (oven-sh/icu: or what SuccinctDictionaryMatcher reads, with the trie type TRIE_TYPE_SUCCINCT.)
  * Such files are used in dictionary-based break iteration (DBBI).
  *
  * For a BytesTrie, a transformation type is specified for

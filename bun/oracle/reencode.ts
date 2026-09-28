@@ -7,8 +7,7 @@
 
 import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
-import { dictionaryWords, succinctDictionary } from "../data/icu-dict.ts";
+import { succinctDictionary } from "../data/icu-dict.ts";
 import { canCompact, compactTree } from "../data/icu-res.ts";
 
 const [from, to] = process.argv.slice(2);
@@ -34,9 +33,8 @@ for (const tree of TREES) {
   console.log(`${tree || "locales"}: ${bundles.size} bundles, ${before + pool.length} -> ${archive.length} bytes`);
 }
 
-const words = fileURLToPath(new URL("../../icu4c/source/data/brkitr/dictionaries/cjdict.txt", import.meta.url));
 const dictionary = readFileSync(join(from, "brkitr/cjdict.dict"));
-const succinct = succinctDictionary(dictionary, dictionaryWords(readFileSync(words, "utf8")));
+const succinct = succinctDictionary(dictionary);
 mkdirSync(join(to, "brkitr"), { recursive: true });
 writeFileSync(join(to, "brkitr/cjdict.dict"), succinct);
 console.log(`cjdict: ${dictionary.length} -> ${succinct.length} bytes`);

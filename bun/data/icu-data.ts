@@ -23,7 +23,7 @@ import { availableParallelism } from "node:os";
 import { basename, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
-import { dictionaryWords, succinctDictionary } from "./icu-dict.ts";
+import { succinctDictionary } from "./icu-dict.ts";
 import { canCompact, compactTree } from "./icu-res.ts";
 
 // ───────────────────────────────────────────────────────────────────────────
@@ -599,8 +599,7 @@ try {
 for (const d of args.uncompacted ? [] : dictionaries) {
   if (!DICTIONARIES[d]!.includes("--uchars")) continue;
   const file = join(outDir, "brkitr", d + ".dict");
-  const words = dictionaryWords(readFileSync(join(dataDir, "brkitr/dictionaries", d + ".txt"), "utf8"));
-  writeFileSync(file, succinctDictionary(readFileSync(file), words));
+  writeFileSync(file, succinctDictionary(readFileSync(file)));
 }
 
 for (const tree of TREES) {

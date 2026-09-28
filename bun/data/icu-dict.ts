@@ -54,13 +54,65 @@ class Bits {
   }
 }
 
-/** The words of a dictionary's source: a word, and a value after a tab, on each line that is not a comment. */
-export function dictionaryWords(text: string): Map<string, number> {
+/** The words of a UCharsTrie and their values. See ucharstrie.h, and UCharsTrie::Iterator for the walk. */
+function ucharsTrieWords(units: Uint16Array): Map<string, number> {
+  const MIN_LINEAR_MATCH = 0x30;
+  const MIN_VALUE_LEAD = 0x40;
+  const MAX_BRANCH_LINEAR_SUB_NODE_LENGTH = 5;
+  const at = (pos: number) => units[pos]!;
+  /** How many units after the lead unit a number takes, and the number: a value, the value of a node with children, a delta. */
+  const value = (pos: number, lead: number): [number, number] =>
+    lead < 0x4000 ? [0, lead] : lead < 0x7fff ? [1, ((lead - 0x4000) << 16) | at(pos)] : [2, (at(pos) << 16) | at(pos + 1)];
+  const nodeValue = (pos: number, lead: number): [number, number] =>
+    lead < 0x4040
+      ? [0, (lead >> 6) - 1]
+      : lead < 0x7fc0
+        ? [1, (((lead & 0x7fc0) - 0x4040) << 10) | at(pos)]
+        : [2, (at(pos) << 16) | at(pos + 1)];
+  const delta = (pos: number, lead: number): [number, number] =>
+    lead < 0xfc00 ? [0, lead] : lead < 0xffff ? [1, ((lead - 0xfc00) << 16) | at(pos)] : [2, (at(pos) << 16) | at(pos + 1)];
+
   const words = new Map<string, number>();
-  for (const line of text.replace(/^﻿/, "").split("\n")) {
-    const [word, value] = line.replace(/#.*/, "").trim().split(/\s+/);
-    if (word) words.set(word, value === undefined ? 0 : Number(value));
-  }
+  const branch = (pos: number, length: number, prefix: string): void => {
+    while (length > MAX_BRANCH_LINEAR_SUB_NODE_LENGTH) {
+      // After the unit to compare with: how far it is to those below it. Those from it on follow.
+      const [more, jump] = delta(pos + 2, at(pos + 1));
+      pos += 2 + more;
+      branch(pos + jump, length >> 1, prefix);
+      length -= length >> 1;
+    }
+    for (; length > 1; length--) {
+      const word = prefix + String.fromCharCode(at(pos));
+      const lead = at(pos + 1);
+      const [more, number] = value(pos + 2, lead & 0x7fff);
+      pos += 2 + more;
+      if (lead & 0x8000) words.set(word, number);
+      else walk(pos + number, word);
+    }
+    walk(pos + 1, prefix + String.fromCharCode(at(pos)));
+  };
+  const walk = (pos: number, prefix: string): void => {
+    for (;;) {
+      let node = at(pos++);
+      if (node >= MIN_VALUE_LEAD) {
+        if (node & 0x8000) {
+          words.set(prefix, value(pos, node & 0x7fff)[1]);
+          return;
+        }
+        const [more, number] = nodeValue(pos, node);
+        words.set(prefix, number);
+        pos += more;
+        node &= MIN_VALUE_LEAD - 1;
+      }
+      if (node < MIN_LINEAR_MATCH) {
+        if (node === 0) node = at(pos++);
+        return branch(pos, node + 1, prefix);
+      }
+      const length = node - MIN_LINEAR_MATCH + 1;
+      for (let i = 0; i < length; i++) prefix += String.fromCharCode(at(pos++));
+    }
+  };
+  walk(0, "");
   return words;
 }
 
@@ -240,13 +292,15 @@ function read(data: Buffer): Map<string, number> {
 
 /**
  * @param dictionary what gendict --uchars wrote
- * @param words what it wrote it from
  * @returns what takes its place in the package
  */
-export function succinctDictionary(dictionary: Buffer, words: Map<string, number>): Buffer {
+export function succinctDictionary(dictionary: Buffer): Buffer {
   const indexes = dictionary.readUInt16LE(0);
   const index = (i: number) => dictionary.readInt32LE(indexes + i * 4);
   if ((index(IX_TRIE_TYPE) & TRIE_TYPE_MASK) !== TRIE_TYPE_UCHARS) throw new Error("not a UCharsTrie dictionary");
+  const trie = dictionary.subarray(indexes + index(IX_STRING_TRIE_OFFSET), indexes + index(IX_TOTAL_SIZE));
+  const words = ucharsTrieWords(Uint16Array.from({ length: trie.length >> 1 }, (_, i) => trie.readUInt16LE(i * 2)));
+  if ([...words.values()].some(value => value < 0 || value > 0xff)) throw new Error("a value does not fit a byte");
 
   const counts = new Map<number, number>();
   for (const word of words.keys()) {
@@ -264,7 +318,10 @@ export function succinctDictionary(dictionary: Buffer, words: Map<string, number
   }
 
   const head = Buffer.from(dictionary.subarray(0, indexes + index(IX_STRING_TRIE_OFFSET)));
-  head.writeInt32LE(index(IX_STRING_TRIE_OFFSET) + data.length, indexes + IX_TOTAL_SIZE * 4);
+  // The parts after the trie, of which there are none, start where it ends.
+  for (let i = IX_STRING_TRIE_OFFSET + 1; i <= IX_TOTAL_SIZE; i++) {
+    head.writeInt32LE(index(IX_STRING_TRIE_OFFSET) + data.length, indexes + i * 4);
+  }
   head.writeInt32LE((index(IX_TRIE_TYPE) & ~TRIE_TYPE_MASK) | TRIE_TYPE_SUCCINCT, indexes + IX_TRIE_TYPE * 4);
   return Buffer.concat([head, data]);
 }
