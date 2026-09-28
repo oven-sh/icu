@@ -6376,6 +6376,8 @@ const char* const locale_to_langtag[][3] = {
     {"en_US_POSIX", "en-US-u-va-posix", "en-US-u-va-posix"},
     {"en_US_POSIX@calendar=japanese;currency=EUR","en-US-u-ca-japanese-cu-eur-va-posix", "en-US-u-ca-japanese-cu-eur-va-posix"},
     {"@x=elmer",    "und-x-elmer",      "und-x-elmer"},
+    {"x_elmer",     "und-x-elmer",      NULL},
+    {"i_default",   "und-x-i-default",  NULL},
     {"en@x=elmer",  "en-x-elmer",   "en-x-elmer"},
     {"@x=elmer;a=exta", "und-a-exta-x-elmer",   "und-a-exta-x-elmer"},
     {"en_US@attribute=attr1-attr2;calendar=gregorian", "en-US-u-attr1-attr2-ca-gregory", "en-US-u-attr1-attr2-ca-gregory"},

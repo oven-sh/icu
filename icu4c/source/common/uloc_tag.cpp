@@ -2647,8 +2647,9 @@ ulocimp_toLanguageTag(const char* localeID,
         _appendScriptToLanguageTag(script, U_ZERO_ERROR, sink, strict, status);
         _appendRegionToLanguageTag(region, U_ZERO_ERROR, sink, strict, status);
         // Without a variant there is none to append, as such or for private use, and none that is POSIX.
-        // Without either that or keywords there are no extensions.
-        if (variant.isEmpty() && pKeywordStart == nullptr) { return; }
+        // Without either that or keywords there are no extensions. There are keywords without an @ in an ID such as
+        // x_foo: its language is "x-foo", which uloc_openKeywords() reads as a language tag, with a private use subtag.
+        if (variant.isEmpty() && pKeywordStart == nullptr && uprv_strchr(language.data(), '-') == nullptr) { return; }
     } else {
         auto part = [&](icu::CharString (*get)(std::string_view, UErrorCode&)) {
             tmpStatus = U_ZERO_ERROR;
