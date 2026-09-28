@@ -314,7 +314,7 @@ UErrorCode statusOfNewCalendar(const TimeZone& zone) {
     }
     UErrorCode status = U_ZERO_ERROR;
     GregorianCalendar cal(zone, status);
-    if (uprv_strlen(defaultLocale) < sizeof(knownFor)) {
+    if (U_SUCCESS(status) && uprv_strlen(defaultLocale) < sizeof(knownFor)) {
         Mutex lock(&mutex);
         uprv_strcpy(knownFor, defaultLocale);
         known = status;
