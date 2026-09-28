@@ -192,8 +192,8 @@ private:
         const uint8_t *p = bytes;
         int32_t n = 0;
         for (; i >= 64; i -= 64, p += 8) { n += countBits(load64(p)); }
-        for (; i >= 16; i -= 16, p += 2) { n += countBits(load16(p)); }
-        return i == 0 ? n : n + countBits(load16(p) & ((1u << i) - 1));
+        // Up to 7 bytes past the bits, like skipStrings().
+        return i == 0 ? n : n + countBits(load64(p) & ((uint64_t{1} << i) - 1));
     }
 
     const uint8_t *bytes;
@@ -259,16 +259,22 @@ public:
         int32_t i = find(keyset, *key, key);
         if (i >= 0) {
             int32_t j = i;
+            ResourceCompactContainer c;
+            c.keyBits = nullptr;
             if ((header & HEADER_HAS_KEY_BITS) != 0) {
                 CompactBits has(items);
                 i = has.test(j) ? has.rank(j) : -1;
+                c.keyBits = items;
                 items += ((keyset[0] + 15) >> 4) << 1;
             }
             *indexR = i;
             if (i >= 0) {
                 if ((header & 3) == COMPACT_VALUES) { return value(itemType(keyset, j), load16(items + (i << 1))); }
-                ResourceCompactContainer c;
-                open(URES_TABLE_COMPACT, p, c);
+                c.mode = header & 3;
+                c.keyset = keyset;
+                c.length = c.keyBits == nullptr ? keyset[0] : CompactBits(c.keyBits).count((keyset[0] + 15) >> 4);
+                c.items = items;
+                c.index = c.keyOf = c.key = -1;
                 return item(c, i, j);
             }
         } else {

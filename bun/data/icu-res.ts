@@ -585,13 +585,18 @@ function typeOf(node: Node): number {
 /** Whether a resource of the type is in the compact area, so that its offset is one there. */
 const isCompact = (type: number) => type === Type.TableCompact || type === Type.ArrayCompact;
 
-/** Whether the node is a container of nothing but strings, which a table can have among its items rather than refer to. */
-const isLeaf = (node: Node) =>
-  (node.is === "table" || node.is === "array") && allStrings(node) && isCompact(typeOf(node));
+/**
+ * Whether the node is a container of nothing but strings, which a table has among its items rather than refer to.
+ * Not the table at the root: what follows such an item is found by finding where the item ends, and there they are
+ * the names of all languages, or of all regions.
+ * @param parent the path of the table
+ */
+const isLeaf = (node: Node, parent: string) =>
+  parent !== "" && (node.is === "table" || node.is === "array") && allStrings(node) && isCompact(typeOf(node));
 
 /** The type that a table's keyset has for the node. */
-const typeInTable = (node: Node) =>
-  isLeaf(node) ? (node.is === "table" ? Type.TableInline : Type.ArrayInline) : typeOf(node);
+const typeInTable = (node: Node, parent: string) =>
+  isLeaf(node, parent) ? (node.is === "table" ? Type.TableInline : Type.ArrayInline) : typeOf(node);
 
 const identity = (keys: string[], types: number[]) => `${keys.join("\0")}\x01${types.join()}`;
 const signature = (path: string, keys: string[], types: number[]) => `${path}\x02${identity(keys, types)}`;
@@ -649,7 +654,7 @@ function share(bundles: Bundle[], pool: Pool3): Shared {
     if (node.is !== "table") return;
     node.keys.forEach(needKey);
     if (typeOf(node) === Type.TableCompact) {
-      const types = node.items.map(typeInTable);
+      const types = node.items.map(item => typeInTable(item, path));
       const id = signature(path, node.keys, types);
       const use = uses.get(id) ?? { path, keys: node.keys, types, count: 0 };
       use.count++;
@@ -989,17 +994,17 @@ function encodeBundle(
           const head = words16([node.keys.length, ...node.keys.map(key => shared.keyOffset.get(key)!)]);
           return container32(Type.Table, head, items32(node.items, paths));
         }
-        const { keyset, master } = shared.keysetOf.get(signature(path, node.keys, node.items.map(typeInTable)))!;
+        const { keyset, master } = shared.keysetOf.get(signature(path, node.keys, node.items.map(item => typeInTable(item, path))))!;
         const mode = allStrings(node)
           ? modeOf(node.items as StringNode[])
-          : node.items.some(isLeaf)
+          : node.items.some(item => isLeaf(item, path))
             ? Mode.Inline
             : Mode.Values;
         // What a value points to comes first.
         const values = allStrings(node)
           ? []
           : node.items.map((item, i) =>
-              item.is === "string" || isLeaf(item) ? undefined : emit(item, paths[i]!) & 0xfffffff,
+              item.is === "string" || isLeaf(item, path) ? undefined : emit(item, paths[i]!) & 0xfffffff,
             );
         const at = inline ? cells.length : aligned();
         cells.push(...headers.table.cells(((keyset.offset >> 1) << 3) | (master ? 4 : 0) | mode));
@@ -1015,7 +1020,7 @@ function encodeBundle(
         else if (mode === Mode.Inline)
           sequence(
             node.items.map((item, i) => [item, i] as const),
-            ([item, i]) => (isLeaf(item) ? emit(item, paths[i]!, true) : value(item, i)),
+            ([item, i]) => (isLeaf(item, path) ? emit(item, paths[i]!, true) : value(item, i)),
           );
         else node.items.forEach(value);
         return resource(Type.TableCompact, at);
