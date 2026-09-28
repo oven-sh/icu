@@ -19,6 +19,8 @@
 *   06/24/02    weiv        Added support for resource sharing
 */
 
+#include <atomic>
+
 #include "unicode/utypes.h"
 #include "unicode/udata.h"
 #include "unicode/ustring.h"
@@ -520,17 +522,17 @@ struct WideStrings {
      * An entry is 0, or a key, which is not 0, in bits 31..0, the index of a chunk in bits 63..56,
      * and in bits 55..32 the index in the chunk of the string's first unit. Its length is in the unit before that.
      */
-    uint64_t *tables[MAX_TABLES];
-    int32_t tableCount;
+    std::atomic<uint64_t> *tables[MAX_TABLES] = {};
+    std::atomic<int32_t> tableCount{0};
     /** How many entries of the last table are taken: at most 3/4. */
-    uint32_t countInLastTable;
-    char16_t *chunks[MAX_CHUNKS];
-    int32_t chunkCount;
+    uint32_t countInLastTable = 0;
+    char16_t *chunks[MAX_CHUNKS] = {};
+    int32_t chunkCount = 0;
     /** Of the last chunk. */
-    int32_t used, capacity;
+    int32_t used = 0, capacity = 0;
     /** Of all chunks. */
-    int64_t totalCapacity;
-    int32_t archiveCount;
+    int64_t totalCapacity = 0;
+    int32_t archiveCount = 0;
 
     static uint32_t hash(uint32_t key) { return (key * 0x9e3779b1u) >> 4; }
 
@@ -540,11 +542,11 @@ struct WideStrings {
     U_FORCE_INLINE const char16_t *find(uint32_t key) const {
         uint32_t start = hash(key);
         // Most strings are in the last table.
-        for (int32_t t = __atomic_load_n(&tableCount, __ATOMIC_ACQUIRE); --t >= 0;) {
-            const uint64_t *table = tables[t];
+        for (int32_t t = tableCount.load(std::memory_order_acquire); --t >= 0;) {
+            const std::atomic<uint64_t> *table = tables[t];
             uint32_t mask = tableLength(t) - 1;
             for (uint32_t i = start;; ++i) {
-                uint64_t entry = __atomic_load_n(table + (i & mask), __ATOMIC_ACQUIRE);
+                uint64_t entry = table[i & mask].load(std::memory_order_acquire);
                 if (static_cast<uint32_t>(entry) == key) { return chunks[entry >> 56] + ((entry >> 32) & 0xffffff); }
                 if (entry == 0) { break; }
             }
@@ -558,8 +560,8 @@ struct WideStrings {
             // In pieces of a quarter of what there is, so that little of it is unused.
             int64_t next = totalCapacity >> 2;
             if (next < MIN_CHUNK_LENGTH) { next = MIN_CHUNK_LENGTH; }
-            if (next < length + 2) { next = length + 2; }
-            if (next > MAX_CHUNK_LENGTH || chunkCount == MAX_CHUNKS) { return nullptr; }
+            if (next > MAX_CHUNK_LENGTH) { next = MAX_CHUNK_LENGTH; }
+            if (next < length + 2 || chunkCount == MAX_CHUNKS) { return nullptr; }
             char16_t *chunk = static_cast<char16_t *>(uprv_malloc(next * U_SIZEOF_UCHAR));
             if (chunk == nullptr) { return nullptr; }
             chunks[chunkCount++] = chunk;
@@ -572,31 +574,41 @@ struct WideStrings {
         return s;
     }
 
-    /** @param s from allocate(), which has not been called since */
-    UBool add(uint32_t key, const char16_t *s) {
-        uint32_t length = tableCount == 0 ? 0 : tableLength(tableCount - 1);
-        if (countInLastTable >= length - (length >> 2)) {
-            if (tableCount == MAX_TABLES) { return false; }
-            length = tableLength(tableCount);
-            uint64_t *table = static_cast<uint64_t *>(uprv_calloc(length, sizeof(uint64_t)));
-            if (table == nullptr) { return false; }
-            tables[tableCount] = table;
-            countInLastTable = 0;
-            __atomic_store_n(&tableCount, tableCount + 1, __ATOMIC_RELEASE);
-        }
-        uint64_t *table = tables[tableCount - 1];
-        uint32_t i = hash(key) & (length - 1);
-        while (table[i] != 0) { i = (i + 1) & (length - 1); }
-        ++countInLastTable;
-        uint64_t place = (static_cast<uint64_t>(chunkCount - 1) << 24) | static_cast<uint64_t>(s - chunks[chunkCount - 1]);
-        __atomic_store_n(table + i, (place << 32) | key, __ATOMIC_RELEASE);
+    /** Whether there is room for another entry, after making it. */
+    UBool ensureEntry() {
+        int32_t count = tableCount.load(std::memory_order_relaxed);
+        uint32_t length = count == 0 ? 0 : tableLength(count - 1);
+        if (countInLastTable < length - (length >> 2)) { return true; }
+        if (count == MAX_TABLES) { return false; }
+        // All bits 0 is an atomic 0: there are too many entries to construct each, most of them in pages never touched.
+        static_assert(sizeof(std::atomic<uint64_t>) == sizeof(uint64_t) && std::atomic<uint64_t>::is_always_lock_free);
+        void *table = uprv_calloc(tableLength(count), sizeof(uint64_t));
+        if (table == nullptr) { return false; }
+        tables[count] = static_cast<std::atomic<uint64_t> *>(table);
+        countInLastTable = 0;
+        tableCount.store(count + 1, std::memory_order_release);
         return true;
     }
 
+    /** @param s from allocate(), which has not been called since, after ensureEntry() */
+    void add(uint32_t key, const char16_t *s) {
+        int32_t last = tableCount.load(std::memory_order_relaxed) - 1;
+        std::atomic<uint64_t> *table = tables[last];
+        uint32_t mask = tableLength(last) - 1;
+        uint32_t i = hash(key) & mask;
+        while (table[i].load(std::memory_order_relaxed) != 0) { i = (i + 1) & mask; }
+        ++countInLastTable;
+        uint64_t place = (static_cast<uint64_t>(chunkCount - 1) << 24) | static_cast<uint64_t>(s - chunks[chunkCount - 1]);
+        table[i].store((place << 32) | key, std::memory_order_release);
+    }
+
     void clear() {
-        for (int32_t i = 0; i < tableCount; ++i) { uprv_free(tables[i]); }
+        for (int32_t i = tableCount.load(std::memory_order_relaxed); --i >= 0;) { uprv_free(tables[i]); }
         for (int32_t i = 0; i < chunkCount; ++i) { uprv_free(chunks[i]); }
-        uprv_memset(this, 0, sizeof(*this));
+        tableCount.store(0, std::memory_order_relaxed);
+        countInLastTable = 0;
+        chunkCount = used = capacity = archiveCount = 0;
+        totalCapacity = 0;
     }
 };
 
@@ -621,12 +633,13 @@ const char16_t *widenFirst(const ResourceData *pResData, uint32_t o, uint32_t ke
     Grammar grammar(pResData->grammar);
     const uint8_t *cells = pResData->pCompact + o;
     int32_t length = grammar.expand(cells, nullptr, nullptr);
-    char16_t *s = gWideStrings.allocate(length);
+    char16_t *s = gWideStrings.ensureEntry() ? gWideStrings.allocate(length) : nullptr;
     if (s == nullptr) { return nullptr; }
     s[-1] = length < WideStrings::LONG ? static_cast<char16_t>(length) : WideStrings::LONG;
     grammar.expand(cells, nullptr, s);
     s[length] = 0;
-    return gWideStrings.add(key, s) ? s : nullptr;
+    gWideStrings.add(key, s);
+    return s;
 }
 
 /**
@@ -1073,9 +1086,10 @@ int32_t getStringArray(const ResourceData *pResData, const icu::ResourceArray &a
     for(int32_t i = 0; i < length; ++i) {
         int32_t sLength;
         // No tracing: handled by the caller
-        const char16_t *s = res_getStringNoTrace(pResData, array.internalGetResource(pResData, i), &sLength);
+        Resource item = array.internalGetResource(pResData, i);
+        const char16_t *s = res_getStringNoTrace(pResData, item, &sLength);
         if(s == nullptr) {
-            errorCode = U_RESOURCE_TYPE_MISMATCH;
+            errorCode = res_getStringError(item);
             return 0;
         }
         dest[i].setTo(true, s, sLength);
@@ -1183,7 +1197,7 @@ const char16_t *ResourceDataValue::getString(int32_t &length, UErrorCode &errorC
     }
     const char16_t *s = res_getString(fTraceInfo, &getData(), res, &length);
     if(s == nullptr) {
-        errorCode = U_RESOURCE_TYPE_MISMATCH;
+        errorCode = res_getStringError(res);
     }
     return s;
 }
@@ -1347,7 +1361,7 @@ int32_t ResourceDataValue::getStringArrayOrStringAsArray(UnicodeString *dest, in
         dest[0].setTo(true, s, sLength);
         return 1;
     }
-    errorCode = U_RESOURCE_TYPE_MISMATCH;
+    errorCode = res_getStringError(res);
     return 0;
 }
 
@@ -1362,17 +1376,24 @@ UnicodeString ResourceDataValue::getStringOrFirstOfArray(UErrorCode &errorCode) 
         us.setTo(true, s, sLength);
         return us;
     }
+    if(res_getStringError(res) == U_MEMORY_ALLOCATION_ERROR) {
+        errorCode = U_MEMORY_ALLOCATION_ERROR;
+        return us;
+    }
     ResourceArray array = getArray(errorCode);
     if(U_FAILURE(errorCode)) {
         return us;
     }
     if(array.getSize() > 0) {
         // Tracing is already performed above (unimportant for trace that this is an array)
-        s = res_getStringNoTrace(&getData(), array.internalGetResource(&getData(), 0), &sLength);
+        Resource first = array.internalGetResource(&getData(), 0);
+        s = res_getStringNoTrace(&getData(), first, &sLength);
         if(s != nullptr) {
             us.setTo(true, s, sLength);
             return us;
         }
+        errorCode = res_getStringError(first);
+        return us;
     }
     errorCode = U_RESOURCE_TYPE_MISMATCH;
     return us;

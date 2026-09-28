@@ -114,4 +114,9 @@ typedef struct {
  */
 U_CFUNC void udata_checkCommonData(UDataMemory *pData, UErrorCode *pErrorCode);
 
+/**
+ * Whether this item of ICU's data is looked for in u_getTimeZoneFilesDirectory() before anywhere else.
+ */
+U_CFUNC UBool udata_isTimeZoneFile(const char *name, const char *type);
+
 #endif

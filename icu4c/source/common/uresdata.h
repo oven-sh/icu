@@ -576,6 +576,15 @@ res_getPublicType(Resource res);
 U_CAPI const UChar * U_EXPORT2
 res_getStringNoTrace(const ResourceData *pResData, Resource res, int32_t *pLength);
 
+/**
+ * What it means that res_getString() or res_getStringNoTrace() returned nullptr. A string of formatVersion 4
+ * is written out in UTF-16 when it is first asked for, which takes memory.
+ */
+inline UErrorCode res_getStringError(Resource res) {
+    return RES_GET_TYPE(res) == URES_STRING || RES_GET_TYPE(res) == URES_STRING_V2 ?
+        U_MEMORY_ALLOCATION_ERROR : U_RESOURCE_TYPE_MISMATCH;
+}
+
 U_CAPI const uint8_t * U_EXPORT2
 res_getBinaryNoTrace(const ResourceData *pResData, Resource res, int32_t *pLength);
 

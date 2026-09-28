@@ -41,6 +41,7 @@
 #include "putilimp.h"
 #include "uassert.h"
 #include "uresdata.h"
+#include "ucmndata.h"
 
 using namespace icu;
 
@@ -518,15 +519,29 @@ static UResourceDataEntry *init_entry(const char *localeID, const char *path, UE
         }
 
         /* this is the actual loading */
-        if (uprv_strcmp(name, kPoolBundleName) != 0) {
+        UBool loaded = false;
+        if (path == nullptr && udata_isTimeZoneFile(name, "res")) {
+            /* The files of a time zone update come before ICU's data, so before a pool bundle that has these inside. */
+            UErrorCode filesStatus = U_ZERO_ERROR;
+            if (u_getTimeZoneFilesDirectory(&filesStatus)[0] != 0) {
+                res_load(&(r->fData), r->fPath, r->fName, &filesStatus);
+                /* Such a file is complete in itself. One that is not is ICU's own, from next to the pool bundle. */
+                loaded = U_SUCCESS(filesStatus) && !r->fData.usesPoolBundle;
+                if (!loaded) {
+                    res_unload(&(r->fData));
+                }
+            }
+        }
+        if (!loaded && uprv_strcmp(name, kPoolBundleName) != 0) {
             /* formatVersion 4: the bundles next to a pool bundle are inside it */
             UErrorCode poolStatus = U_ZERO_ERROR;
             UResourceDataEntry *pool = getPoolEntry(r->fPath, &poolStatus);
             if (U_SUCCESS(poolStatus) && res_loadFromPool(&(r->fData), &(pool->fData), r->fName, status)) {
                 r->fPool = pool;
+                loaded = true;
             }
         }
-        if (r->fPool == nullptr) {
+        if (!loaded) {
             res_load(&(r->fData), r->fPath, r->fName, status);
         }
 
@@ -562,6 +577,12 @@ static UResourceDataEntry *init_entry(const char *localeID, const char *path, UE
                 if (aliasres != RES_BOGUS) {
                     // No tracing: called during initial data loading
                     const char16_t *alias = res_getStringNoTrace(&(r->fData), aliasres, &aliasLen);
+                    if(alias == nullptr && res_getStringError(aliasres) == U_MEMORY_ALLOCATION_ERROR) {
+                        /* not an entry without its alias */
+                        *status = U_MEMORY_ALLOCATION_ERROR;
+                        free_entry(r);
+                        return nullptr;
+                    }
                     if(alias != nullptr && aliasLen > 0) { /* if there is actual alias - unload and load new data */
                         u_UCharsToChars(alias, aliasName, aliasLen+1);
                         r->fAlias = init_entry(aliasName, path, status);
@@ -708,6 +729,10 @@ loadParentsExceptRoot(UResourceDataEntry *&t1,
             int32_t parentLocaleLen = 0;
             // No tracing: called during initial data loading
             const char16_t *parentLocaleName = res_getStringNoTrace(&(t1->fData), parentRes, &parentLocaleLen);
+            if(parentLocaleName == nullptr && res_getStringError(parentRes) == U_MEMORY_ALLOCATION_ERROR) {
+                *status = U_MEMORY_ALLOCATION_ERROR;
+                return false;
+            }
             if(parentLocaleName != nullptr && 0 < parentLocaleLen && parentLocaleLen < nameCapacity) {
                 u_UCharsToChars(parentLocaleName, name, parentLocaleLen + 1);
                 if (uprv_strcmp(name, kRootLocaleName) == 0) {
@@ -1412,7 +1437,7 @@ U_CAPI const char16_t* U_EXPORT2 ures_getString(const UResourceBundle* resB, int
     }
     s = res_getString({resB}, &resB->getResData(), resB->fRes, len);
     if (s == nullptr) {
-        *status = U_RESOURCE_TYPE_MISMATCH;
+        *status = res_getStringError(resB->fRes);
     }
     return s;
 }
@@ -1586,6 +1611,16 @@ U_CAPI int32_t U_EXPORT2 ures_getSize(const UResourceBundle *resB) {
   return resB->fSize;
 }
 
+/** res_getString(), which cannot say that there is no memory to write a string of formatVersion 4 out in. */
+static const char16_t *getString(const ResourceTracer &traceInfo, const ResourceData *pResData, Resource res,
+                                 int32_t *len, UErrorCode *status) {
+    const char16_t *s = res_getString(traceInfo, pResData, res, len);
+    if (s == nullptr && res_getStringError(res) == U_MEMORY_ALLOCATION_ERROR) {
+        *status = U_MEMORY_ALLOCATION_ERROR;
+    }
+    return s;
+}
+
 static const char16_t* ures_getStringWithAlias(const UResourceBundle *resB, Resource r, int32_t sIndex, int32_t *len, UErrorCode *status) {
   if(RES_GET_TYPE(r) == URES_ALIAS) {
     const char16_t* result = nullptr;
@@ -1594,7 +1629,7 @@ static const char16_t* ures_getStringWithAlias(const UResourceBundle *resB, Reso
     ures_close(tempRes);
     return result;
   } else {
-    return res_getString({resB, sIndex}, &resB->getResData(), r, len); 
+    return getString({resB, sIndex}, &resB->getResData(), r, len, status);
   }
 }
 
@@ -1630,7 +1665,7 @@ U_CAPI const char16_t* U_EXPORT2 ures_getNextString(UResourceBundle *resB, int32
     switch(RES_GET_TYPE(resB->fRes)) {
     case URES_STRING:
     case URES_STRING_V2:
-      return res_getString({resB}, &resB->getResData(), resB->fRes, len);
+      return getString({resB}, &resB->getResData(), resB->fRes, len, status);
     case URES_TABLE:
     case URES_TABLE16:
     case URES_TABLE32:
@@ -1781,7 +1816,7 @@ U_CAPI const char16_t* U_EXPORT2 ures_getStringByIndex(const UResourceBundle *re
         switch(RES_GET_TYPE(resB->fRes)) {
         case URES_STRING:
         case URES_STRING_V2:
-            return res_getString({resB}, &resB->getResData(), resB->fRes, len);
+            return getString({resB}, &resB->getResData(), resB->fRes, len, status);
         case URES_TABLE:
         case URES_TABLE16:
         case URES_TABLE32:
@@ -2457,7 +2492,7 @@ U_CAPI const char16_t* U_EXPORT2 ures_getStringByKey(const UResourceBundle *resB
                     switch (RES_GET_TYPE(res)) {
                     case URES_STRING:
                     case URES_STRING_V2:
-                        return res_getString({resB, key}, &dataEntry->fData, res, len);
+                        return getString({resB, key}, &dataEntry->fData, res, len, status);
                     case URES_ALIAS:
                       {
                         const char16_t* result = nullptr;
@@ -2479,7 +2514,7 @@ U_CAPI const char16_t* U_EXPORT2 ures_getStringByKey(const UResourceBundle *resB
             switch (RES_GET_TYPE(res)) {
             case URES_STRING:
             case URES_STRING_V2:
-                return res_getString({resB, key}, &resB->getResData(), res, len);
+                return getString({resB, key}, &resB->getResData(), res, len, status);
             case URES_ALIAS:
               {
                 const char16_t* result = nullptr;
