@@ -1165,7 +1165,13 @@ udat_setSymbols(    UDateFormat             *format,
     verifyIsSimpleDateFormat(format, status);
     if(U_FAILURE(*status)) return;
 
-    DateFormatSymbols *syms = (DateFormatSymbols *)((SimpleDateFormat *)format)->getDateFormatSymbols();
+    // The format's may be the cache's, which are not to be changed.
+    DateFormatSymbols *syms = new DateFormatSymbols(*((SimpleDateFormat *)format)->getDateFormatSymbols());
+    if (syms == nullptr) {
+        *status = U_MEMORY_ALLOCATION_ERROR;
+        return;
+    }
+    ((SimpleDateFormat *)format)->adoptDateFormatSymbols(syms);
 
     switch(type) {
     case UDAT_ERAS:

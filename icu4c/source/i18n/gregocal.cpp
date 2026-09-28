@@ -46,6 +46,8 @@
 
 #include "unicode/gregocal.h"
 #include "gregoimp.h"
+#include "cstring.h"
+#include "mutex.h"
 #include "umutex.h"
 #include "uassert.h"
 
@@ -291,6 +293,38 @@ UBool GregorianCalendar::isEquivalentTo(const Calendar& other) const
 
 // -------------------------------------
 
+namespace {
+
+/**
+ * What GregorianCalendar(zone, status) makes of a status that is not a failure.
+ * Calendar::setWeekData() clears it, and may then leave a warning about the data of the default locale.
+ */
+UErrorCode statusOfNewCalendar(const TimeZone& zone) {
+    static UMutex mutex;
+    static char knownFor[ULOC_FULLNAME_CAPACITY];
+    static UErrorCode known;
+    static bool isKnown = false;
+
+    const char* defaultLocale = Locale::getDefault().getName();
+    {
+        Mutex lock(&mutex);
+        if (isKnown && uprv_strcmp(knownFor, defaultLocale) == 0) {
+            return known;
+        }
+    }
+    UErrorCode status = U_ZERO_ERROR;
+    GregorianCalendar cal(zone, status);
+    if (uprv_strlen(defaultLocale) < sizeof(knownFor)) {
+        Mutex lock(&mutex);
+        uprv_strcpy(knownFor, defaultLocale);
+        known = status;
+        isKnown = true;
+    }
+    return status;
+}
+
+}  // namespace
+
 void
 GregorianCalendar::setGregorianChange(UDate date, UErrorCode& status)
 {
@@ -320,22 +354,25 @@ GregorianCalendar::setGregorianChange(UDate date, UErrorCode& status)
 
     // Normalize the year so BC values are represented as 0 and negative
     // values.
-    GregorianCalendar *cal = new GregorianCalendar(getTimeZone(), status);
-    /* test for nullptr */
-    if (cal == nullptr) {
-        status = U_MEMORY_ALLOCATION_ERROR;
+    // With a calendar as GregorianCalendar(getTimeZone(), status) makes it, but for the week data,
+    // which neither field depends on. Making one looks those up for the default locale, and takes longer than all else here.
+    status = statusOfNewCalendar(getTimeZone());
+    if (U_FAILURE(status)) {
         return;
     }
-    if(U_FAILURE(status)) {
-        return;
-    }
-    cal->setTime(date, status);
-    fGregorianCutoverYear = cal->get(UCAL_YEAR, status);
-    if (cal->get(UCAL_ERA, status) == BC) {
+    GregorianCalendar cal(*this);
+    cal.fGregorianCutover = kPapalCutover;
+    cal.fCutoverJulianDay = kCutoverJulianDay;
+    cal.fGregorianCutoverYear = kDefaultCutoverYear;
+    cal.fIsGregorian = true;
+    cal.fInvertGregorian = false;
+    cal.setLenient(true);
+    cal.setTime(date, status);
+    fGregorianCutoverYear = cal.get(UCAL_YEAR, status);
+    if (cal.get(UCAL_ERA, status) == BC) {
         fGregorianCutoverYear = 1 - fGregorianCutoverYear;
     }
     fCutoverJulianDay = static_cast<int32_t>(cutoverDay);
-    delete cal;
 }
 
 void GregorianCalendar::handleComputeFields(int32_t julianDay, UErrorCode& status) {

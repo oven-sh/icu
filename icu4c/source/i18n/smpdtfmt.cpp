@@ -68,6 +68,7 @@
 #include "mutex.h"
 #include <float.h>
 #include "smpdtfst.h"
+#include "shareddateformatsymbols.h"
 #include "sharednumberformat.h"
 #include "ucasemap_imp.h"
 #include "ustr_imp.h"
@@ -277,6 +278,42 @@ static void fixNumberFormatForDates(NumberFormat &nf) {
     nf.setMinimumFractionDigits(0); // To prevent "Jan 1.00, 1997.00"
 }
 
+/**
+ * NumberFormat::createInstance(locale) after fixNumberFormatForDates(), to clone.
+ * Each of the changes that that makes has a DecimalFormat work out anew how it formats and parses.
+ */
+class SharedDateNumberFormat : public SharedObject {
+public:
+    explicit SharedDateNumberFormat(NumberFormat *nfToAdopt) : ptr(nfToAdopt) {}
+    virtual ~SharedDateNumberFormat();
+    const NumberFormat &operator*() const { return *ptr; }
+private:
+    LocalPointer<NumberFormat> ptr;
+};
+
+SharedDateNumberFormat::~SharedDateNumberFormat() = default;
+
+template<>
+const SharedDateNumberFormat *LocaleCacheKey<SharedDateNumberFormat>::createObject(
+        const void * /*unused*/, UErrorCode &status) const {
+    LocalPointer<NumberFormat> nf(NumberFormat::createInstance(fLoc, status));
+    if (U_FAILURE(status)) {
+        return nullptr;
+    }
+    if (nf.isNull()) {
+        status = U_MISSING_RESOURCE_ERROR;
+        return nullptr;
+    }
+    fixNumberFormatForDates(*nf);
+    LocalPointer<SharedDateNumberFormat> result(new SharedDateNumberFormat(nf.getAlias()), status);
+    if (U_FAILURE(status)) {
+        return nullptr;
+    }
+    nf.orphan();
+    result->addRef();
+    return result.orphan();
+}
+
 static const SharedNumberFormat *createSharedNumberFormat(
         NumberFormat *nfToAdopt) {
     fixNumberFormatForDates(*nfToAdopt);
@@ -332,7 +369,7 @@ const NumberFormat *SimpleDateFormat::getNumberFormatByIndex(
 
 SimpleDateFormat::~SimpleDateFormat()
 {
-    delete fSymbols;
+    deleteSymbols();
     if (fSharedNumberFormatters) {
         freeSharedNumberFormatters(fSharedNumberFormatters);
     }
@@ -365,7 +402,7 @@ SimpleDateFormat::SimpleDateFormat(const UnicodeString& pattern,
     fTimeOverride.setToBogus();
     initializeBooleanAttributes();
     initializeCalendar(nullptr,fLocale,status);
-    fSymbols = DateFormatSymbols::createForLocale(fLocale, status);
+    useSymbolsOf(fLocale, status);
     initialize(fLocale, status);
     initializeDefaultCentury();
 
@@ -382,7 +419,7 @@ SimpleDateFormat::SimpleDateFormat(const UnicodeString& pattern,
     fTimeOverride.setToBogus();
     initializeBooleanAttributes();
     initializeCalendar(nullptr,fLocale,status);
-    fSymbols = DateFormatSymbols::createForLocale(fLocale, status);
+    useSymbolsOf(fLocale, status);
     initialize(fLocale, status);
     initializeDefaultCentury();
 
@@ -404,7 +441,7 @@ SimpleDateFormat::SimpleDateFormat(const UnicodeString& pattern,
     initializeBooleanAttributes();
 
     initializeCalendar(nullptr,fLocale,status);
-    fSymbols = DateFormatSymbols::createForLocale(fLocale, status);
+    useSymbolsOf(fLocale, status);
     initialize(fLocale, status);
     initializeDefaultCentury();
 }
@@ -424,7 +461,7 @@ SimpleDateFormat::SimpleDateFormat(const UnicodeString& pattern,
     initializeBooleanAttributes();
 
     initializeCalendar(nullptr,fLocale,status);
-    fSymbols = DateFormatSymbols::createForLocale(fLocale, status);
+    useSymbolsOf(fLocale, status);
     initialize(fLocale, status);
     initializeDefaultCentury();
 
@@ -501,11 +538,11 @@ SimpleDateFormat::SimpleDateFormat(const Locale& locale,
     if (U_FAILURE(status)) return;
     initializeBooleanAttributes();
     initializeCalendar(nullptr, fLocale, status);
-    fSymbols = DateFormatSymbols::createForLocale(fLocale, status);
+    useSymbolsOf(fLocale, status);
     if (U_FAILURE(status))
     {
         status = U_ZERO_ERROR;
-        delete fSymbols;
+        deleteSymbols();
         // This constructor doesn't fail; it uses last resort data
         fSymbols = new DateFormatSymbols(status);
         /* test for nullptr */
@@ -551,10 +588,12 @@ SimpleDateFormat& SimpleDateFormat::operator=(const SimpleDateFormat& other)
     fDateOverride = other.fDateOverride;
     fTimeOverride = other.fTimeOverride;
 
-    delete fSymbols;
-    fSymbols = nullptr;
+    deleteSymbols();
 
-    if (other.fSymbols)
+    if (other.fSharedSymbols != nullptr) {
+        SharedObject::copyPtr(other.fSharedSymbols, fSharedSymbols);
+        fSymbols = other.fSymbols;
+    } else if (other.fSymbols)
         fSymbols = new DateFormatSymbols(*other.fSymbols);
 
     fDefaultCenturyStart         = other.fDefaultCenturyStart;
@@ -708,7 +747,7 @@ void SimpleDateFormat::construct(EStyle timeStyle,
                  ures_getLocaleByType(dateTimePatterns.getAlias(), ULOC_ACTUAL_LOCALE, &status));
 
     // create a symbols object from the locale
-    fSymbols = DateFormatSymbols::createForLocale(locale, status);
+    useSymbolsOf(locale, status);
     if (U_FAILURE(status)) return;
     /* test for nullptr */
     if (fSymbols == nullptr) {
@@ -957,10 +996,17 @@ SimpleDateFormat::initialize(const Locale& locale,
 
     // We don't need to check that the row count is >= 1, since all 2d arrays have at
     // least one row
-    fNumberFormat = NumberFormat::createInstance(locale, status);
+    const SharedDateNumberFormat *shared = nullptr;
+    UnifiedCache::getByLocale(locale, shared, status);
+    if (U_SUCCESS(status)) {
+        fNumberFormat = (**shared).clone();
+        shared->removeRef();
+        if (fNumberFormat == nullptr) {
+            status = U_MEMORY_ALLOCATION_ERROR;
+        }
+    }
     if (fNumberFormat != nullptr && U_SUCCESS(status))
     {
-        fixNumberFormatForDates(*fNumberFormat);
         //fNumberFormat->setLenient(true); // Java uses a custom DateNumberFormat to format/parse
 
         initNumberFormatters(locale, status);
@@ -4097,6 +4143,29 @@ SimpleDateFormat::applyLocalizedPattern(const UnicodeString& pattern,
 
 //----------------------------------------------------------------------
 
+void
+SimpleDateFormat::useSymbolsOf(const Locale &locale, UErrorCode &status)
+{
+    deleteSymbols();
+    UnifiedCache::getByLocale(locale, fSharedSymbols, status);
+    if (U_SUCCESS(status)) {
+        fSymbols = const_cast<DateFormatSymbols *>(&fSharedSymbols->get());
+    }
+}
+
+void
+SimpleDateFormat::deleteSymbols()
+{
+    if (fSharedSymbols != nullptr) {
+        SharedObject::clearPtr(fSharedSymbols);
+    } else {
+        delete fSymbols;
+    }
+    fSymbols = nullptr;
+}
+
+//----------------------------------------------------------------------
+
 const DateFormatSymbols*
 SimpleDateFormat::getDateFormatSymbols() const
 {
@@ -4108,7 +4177,7 @@ SimpleDateFormat::getDateFormatSymbols() const
 void
 SimpleDateFormat::adoptDateFormatSymbols(DateFormatSymbols* newFormatSymbols)
 {
-    delete fSymbols;
+    deleteSymbols();
     fSymbols = newFormatSymbols;
 }
 
@@ -4116,7 +4185,7 @@ SimpleDateFormat::adoptDateFormatSymbols(DateFormatSymbols* newFormatSymbols)
 void
 SimpleDateFormat::setDateFormatSymbols(const DateFormatSymbols& newFormatSymbols)
 {
-    delete fSymbols;
+    deleteSymbols();
     fSymbols = new DateFormatSymbols(newFormatSymbols);
 }
 
@@ -4163,7 +4232,7 @@ void SimpleDateFormat::adoptCalendar(Calendar* calendarToAdopt)
       return;
   }
   DateFormat::adoptCalendar(calendarToAdopt);
-  delete fSymbols;
+  deleteSymbols();
   fSymbols = newSymbols;
   initializeDefaultCentury();  // we need a new century (possibly)
 }

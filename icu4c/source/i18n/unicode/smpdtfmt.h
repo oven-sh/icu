@@ -49,6 +49,7 @@ class DateFormat;
 class MessageFormat;
 class FieldPositionHandler;
 class TimeZoneFormat;
+class SharedDateFormatSymbols;
 class SharedNumberFormat;
 class SimpleDateFormatMutableNFs;
 class DateIntervalFormat;
@@ -1248,7 +1249,19 @@ private:
      * A pointer to an object containing the strings to use in formatting (e.g.,
      * month and day names, AM and PM strings, time zone names, etc.)
      */
-    DateFormatSymbols*  fSymbols = nullptr;   // Owned
+    DateFormatSymbols*  fSymbols = nullptr;   // Owned, unless fSharedSymbols has them
+
+    /**
+     * The cache's symbols for a locale, if those are the ones in use. They are not to be changed.
+     */
+    const SharedDateFormatSymbols* fSharedSymbols = nullptr;
+
+    /**
+     * Sets fSymbols to the cache's for the locale, rather than to a copy of them, which is hundreds of strings.
+     */
+    void useSymbolsOf(const Locale& locale, UErrorCode& status);
+
+    void deleteSymbols();
 
     /**
      * The time zone formatter
