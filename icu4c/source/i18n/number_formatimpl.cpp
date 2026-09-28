@@ -32,6 +32,14 @@ SharedNumberLocaleData::SharedNumberLocaleData(const Locale &locale, const Numbe
 
 SharedNumberLocaleData::~SharedNumberLocaleData() = default;
 
+void SharedNumberLocaleData::get(const Locale &locale, const SharedNumberLocaleData *&ptr) {
+    UErrorCode status = U_ZERO_ERROR;
+    UnifiedCache::getByLocale(locale, ptr, status);
+    if (ptr != nullptr && ptr->defaultLocale != &Locale::getDefault()) {
+        SharedObject::clearPtr(ptr);
+    }
+}
+
 const char16_t *SharedNumberLocaleData::getPattern(number::impl::CldrPatternStyle style, UErrorCode &status) const {
     // The string may have been written when it was asked for, see widen() in uresdata.cpp: that has to be seen with the pointer.
     const char16_t *pattern = patterns[style].load(std::memory_order_acquire);
@@ -52,7 +60,16 @@ const char16_t *SharedNumberLocaleData::getPattern(number::impl::CldrPatternStyl
 template<>
 const SharedNumberLocaleData *LocaleCacheKey<SharedNumberLocaleData>::createObject(
         const void * /*unused*/, UErrorCode &status) const {
+    // NumberingSystem::createInstance() ignores a keyword that is too long, and then clears the caller's status,
+    // which warn() cannot do.
+    char numbers[ULOC_KEYWORDS_CAPACITY];
     UErrorCode nsStatus = U_ZERO_ERROR;
+    fLoc.getKeywordValue("numbers", numbers, sizeof(numbers), nsStatus);
+    if (U_FAILURE(nsStatus) || nsStatus == U_STRING_NOT_TERMINATED_WARNING) {
+        status = U_UNSUPPORTED_ERROR;
+        return nullptr;
+    }
+    nsStatus = U_ZERO_ERROR;
     LocalPointer<const NumberingSystem> ns(NumberingSystem::createInstance(fLoc, nsStatus));
     if (U_FAILURE(nsStatus)) {
         status = nsStatus;
@@ -230,8 +247,9 @@ NumberFormatterImpl::macrosToMicroGenerator(const MacroProps& macros, bool safe,
     if (macros.symbols.isNumberingSystem()) {
         ns = macros.symbols.getNumberingSystem();
     } else {
-        UErrorCode cacheStatus = status;
-        UnifiedCache::getByLocale(macros.locale, localeData, cacheStatus);
+        if (U_SUCCESS(status)) {
+            SharedNumberLocaleData::get(macros.locale, localeData);
+        }
         if (localeData != nullptr) {
             // Give ownership to this object.
             fLocaleData = localeData;

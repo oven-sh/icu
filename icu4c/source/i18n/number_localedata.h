@@ -25,7 +25,7 @@ U_NAMESPACE_BEGIN
  * that takes most of the time that making a formatter and using it once does,
  * and a formatter is made anew for each of the first few numbers it formats.
  *
- * From UnifiedCache::getByLocale(). It is by locale, so it is of no use with a numbering system that the locale does not say.
+ * It is by locale, so it is of no use with a numbering system that the locale does not say.
  *
  * Finding these things out may leave a warning in the caller's status, such as that the locale fell back to root.
  * So the warning is kept with each, for warn() to leave it there as well, and only for what the caller does use.
@@ -35,6 +35,13 @@ public:
     /** @param nsStatus what NumberingSystem::createInstance(locale, nsStatus), which ns is from, made of U_ZERO_ERROR */
     SharedNumberLocaleData(const Locale &locale, const NumberingSystem &ns, UErrorCode nsStatus);
     virtual ~SharedNumberLocaleData();
+
+    /**
+     * From the UnifiedCache.
+     * @param ptr set to nullptr if there is none, which is no reason to fail: whoever asks then finds things out itself.
+     *            Otherwise the caller has a reference to it.
+     */
+    static void get(const Locale &locale, const SharedNumberLocaleData *&ptr);
 
     static void warn(UErrorCode warning, UErrorCode &status) {
         if (warning != U_ZERO_ERROR) {
@@ -56,6 +63,8 @@ public:
     mutable std::atomic<int16_t> minGrouping{-1};
 
 private:
+    /** A locale that has no data of its own gets the default locale's. This is which that was. Each lasts until u_cleanup(). */
+    const Locale *const defaultLocale = &Locale::getDefault();
     /** nullptr until asked for. */
     mutable std::atomic<const char16_t *> patterns[number::impl::CLDR_PATTERN_STYLE_COUNT];
     mutable std::atomic<UErrorCode> patternStatuses[number::impl::CLDR_PATTERN_STYLE_COUNT];

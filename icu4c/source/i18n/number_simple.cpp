@@ -184,8 +184,7 @@ void SimpleNumberFormatter::initialize(
         const SharedNumberLocaleData *ptr = nullptr;
         ~LocaleData() { SharedObject::clearPtr(ptr); }
     } localeData;
-    UErrorCode localeDataStatus = U_ZERO_ERROR;
-    UnifiedCache::getByLocale(locale, localeData.ptr, localeDataStatus);
+    SharedNumberLocaleData::get(locale, localeData.ptr);
 
     // Its patterns are for the numbering system that the locale says.
     const auto* pattern =
