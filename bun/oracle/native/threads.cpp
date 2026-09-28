@@ -103,6 +103,11 @@ int main(int, char** argv) {
         UErrorCode status = U_ZERO_ERROR;
         std::string package = "icudt" U_ICU_VERSION_SHORT "l-" + tree;
         UResourceBundle* bundle = ures_open(tree == "-" ? nullptr : package.c_str(), name.c_str(), &status);
+        if (status == U_ILLEGAL_ARGUMENT_ERROR) {
+          // supplementalData is no locale.
+          status = U_ZERO_ERROR;
+          bundle = ures_openDirect(tree == "-" ? nullptr : package.c_str(), name.c_str(), &status);
+        }
         if (U_SUCCESS(status)) walk(bundle, hashes[t], 0);
         else missing++;
         ures_close(bundle);
