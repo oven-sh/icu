@@ -29,6 +29,17 @@ class UCTItem : public SharedObject {
 class UCTItem2 : public SharedObject {
 };
 
+/** Refers to another value in the cache for as long as it lives. */
+class UCTOwner : public SharedObject {
+  public:
+    const UCTItem *item;
+    UCTOwner(const UCTItem *adopted) : item(adopted) {
+    }
+    virtual ~UCTOwner() {
+        item->removeRef();
+    }
+};
+
 U_NAMESPACE_BEGIN
 
 template<> U_EXPORT
@@ -62,6 +73,20 @@ const UCTItem2 *LocaleCacheKey<UCTItem2>::createObject(
     return nullptr;
 }
 
+template<> U_EXPORT
+const UCTOwner *LocaleCacheKey<UCTOwner>::createObject(
+        const void *context, UErrorCode &status) const {
+    const UnifiedCache *cacheContext = static_cast<const UnifiedCache *>(context);
+    const UCTItem *item = nullptr;
+    cacheContext->get(LocaleCacheKey<UCTItem>(fLoc), context, item, status);
+    if (U_FAILURE(status)) {
+        return nullptr;
+    }
+    UCTOwner *result = new UCTOwner(item);
+    result->addRef();
+    return result;
+}
+
 U_NAMESPACE_END
 
 
@@ -78,6 +103,7 @@ private:
     void TestError();
     void TestHashEquals();
     void TestEvictionUnderStress();
+    void TestEvictionOfValueThatRefersToAnother();
 };
 
 void UnifiedCacheTest::runIndexedTest(int32_t index, UBool exec, const char* &name, char* /*par*/) {
@@ -88,6 +114,7 @@ void UnifiedCacheTest::runIndexedTest(int32_t index, UBool exec, const char* &na
   TESTCASE_AUTO(TestError);
   TESTCASE_AUTO(TestHashEquals);
   TESTCASE_AUTO(TestEvictionUnderStress);
+  TESTCASE_AUTO(TestEvictionOfValueThatRefersToAnother);
   TESTCASE_AUTO_END;
 }
 
@@ -107,6 +134,28 @@ void UnifiedCacheTest::TestEvictionUnderStress() {
                __FILE__, __LINE__);
     }
 #endif /* #if !UCONFIG_NO_FORMATTING */
+}
+
+void UnifiedCacheTest::TestEvictionOfValueThatRefersToAnother() {
+    UErrorCode status = U_ZERO_ERROR;
+    UnifiedCache::getInstance(status);
+    UnifiedCache cache(status);
+    assertSuccess("", status);
+
+    // Evict whatever is not in use.
+    cache.setEvictionPolicy(0, 0, status);
+
+    const UCTOwner *owner = nullptr;
+    cache.get(LocaleCacheKey<UCTOwner>("en"), &cache, owner, status);
+    assertSuccess("", status);
+    assertEquals("owner and item", 2, cache.keyCount());
+    assertEquals("both in use", 0, cache.unusedCount());
+
+    // The cache evicts the owner, whose destructor lets go of the last reference to the item,
+    // which the cache is told about in turn. It must not be holding its mutex by then.
+    SharedObject::clearPtr(owner);
+    assertEquals("both evicted", 0, cache.keyCount());
+    assertEquals("nothing left", 0, cache.unusedCount());
 }
 
 void UnifiedCacheTest::TestEvictionPolicy() {
