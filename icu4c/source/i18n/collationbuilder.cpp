@@ -264,9 +264,14 @@ CollationBuilder::parseAndBuild(const UnicodeString &ruleString,
             closeOverComposites(errorCode);
         }
         finalizeCEs(errorCode);
-        // ICU copies ASCII, Latin-1 letters and what the rules ask to [optimize] from the base into each tailoring here.
-        // That saves nothing with CollationMappings, where finding a copy takes as long as
-        // finding that there is none and then finding the original.
+        if (!icu4xMode) {
+            // oven-sh/icu: ICU also copies ASCII and Latin-1 letters from the base into each tailoring here.
+            // They take room in every one, and comparing such text goes by the fast Latin table.
+            // Hangul is decomposed on the fly during collation,
+            // and the tailoring data is always built with HANGUL_TAG specials.
+            optimizeSet.remove(Hangul::HANGUL_BASE, Hangul::HANGUL_END);
+            dataBuilder->optimize(optimizeSet, errorCode);
+        }
         tailoring->ensureOwnedData(errorCode);
         if(U_FAILURE(errorCode)) { return nullptr; }
         if(fastLatinEnabled) { dataBuilder->enableFastLatin(); }
