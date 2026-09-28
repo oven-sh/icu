@@ -713,6 +713,15 @@ public:
      */
     U_I18N_API virtual const DateFormatSymbols* getDateFormatSymbols() const;
 
+#ifndef U_HIDE_INTERNAL_API
+    /**
+     * oven-sh/icu: The symbols, for udat_setSymbols() to change:
+     * the format's own, which are a copy of the cache's if it has used those so far.
+     * @internal
+     */
+    U_I18N_API DateFormatSymbols* getOwnDateFormatSymbols(UErrorCode& status);
+#endif  /* U_HIDE_INTERNAL_API */
+
     /**
      * Set the date/time formatting symbols.  The caller no longer owns the
      * DateFormatSymbols object and should not delete it after making this call.

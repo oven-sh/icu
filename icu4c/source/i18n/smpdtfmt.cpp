@@ -4170,6 +4170,23 @@ SimpleDateFormat::deleteSymbols()
     fSymbols = nullptr;
 }
 
+DateFormatSymbols*
+SimpleDateFormat::getOwnDateFormatSymbols(UErrorCode &status)
+{
+    if (U_FAILURE(status)) {
+        return nullptr;
+    }
+    if (fSharedSymbols != nullptr) {
+        LocalPointer<DateFormatSymbols> copy(new DateFormatSymbols(*fSymbols), status);
+        if (U_FAILURE(status)) {
+            return nullptr;
+        }
+        deleteSymbols();
+        fSymbols = copy.orphan();
+    }
+    return fSymbols;
+}
+
 //----------------------------------------------------------------------
 
 const DateFormatSymbols*
