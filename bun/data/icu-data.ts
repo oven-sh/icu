@@ -36,11 +36,15 @@ import { canCompact, compactTree } from "./icu-res.ts";
  * "Cannot reach" is one of, and each entry below says which:
  *
  *   unnamed   No ICU4C source names the key, whole or in part, and no code enumerates the table it is in. CLDR data
- *             that other consumers (ICU4J, CLDR's own tools) read.
+ *             that other consumers (ICU4J, CLDR's own tools) read. checkUnnamed() looks the keys up in the sources.
  *   unlinked  The only functions that name it are not in Bun: nothing calls them, so the linker dropped them.
  *   refused   ECMA-402 rejects, before ICU sees it, every input that would select it.
  *
  * ../oracle compares what every one of those APIs returns, for every locale, between two builds.
+ *
+ * What is here was written for one release of ICU. With another, a key may have another name, or there may be a file
+ * that nothing here has heard of. So a rule that finds nothing to apply to (checkRules()) and an input that is neither
+ * built nor known to be left out (checkInputs()) are errors: nothing is left out, or kept, by accident.
  *
  * Whole BUILDRULES.py categories that are not built (all unlinked): conversion_mappings (ucnv_*), translit
  * (utrans_*), stringprep (usprep_*), confusables (uspoof_*), unames (u_charName), and the LSTM/AdaBoost break
@@ -120,7 +124,14 @@ interface Tree {
 
 const leaveOut = (...paths: string[]) => paths.map(path => `-/${path}`);
 
-/** genrb's list of the items a bundle names, for icupkg to check a package by. unnamed. */
+/** The last parts of the paths that are left out for being unnamed. */
+const unnamedKeys = new Set<string>();
+const unnamed = (...paths: string[]) => {
+  for (const path of paths) unnamedKeys.add(path.slice(path.lastIndexOf("/") + 1));
+  return leaveOut(...paths);
+};
+
+/** genrb's list of the items a bundle names, for icupkg to check a package by. unnamed, and not in the sources: genrb adds it. */
 const DEPENDENCIES = "%%DEPENDENCY";
 
 const TREES: Tree[] = [
@@ -129,19 +140,14 @@ const TREES: Tree[] = [
     out: "",
     pool: true,
     filter: () => [
-      // unnamed
-      ...leaveOut("characterLabel", "personNames", "measurementSystemNames", "NumberElements/minimalPairs"),
-      ...leaveOut("calendar/*/DateTimeSkeletons", "calendar/*/DateTimePatterns%relative", "fields/*/relativePeriod"),
+      ...unnamed("characterLabel", "personNames", "measurementSystemNames", "NumberElements/minimalPairs"),
+      ...unnamed("calendar/*/DateTimeSkeletons", "calendar/*/DateTimePatterns%relative", "fields/*/relativePeriod"),
       ...["currencyFormat", "accountingFormat"].flatMap(format =>
-        ["patterns", "patternsShort"].flatMap(table =>
-          leaveOut(
-            `NumberElements/*/${table}/${format}%alphaNextToNumber`,
-            `NumberElements/*/${table}/${format}%noCurrency`,
-          ),
-        ),
+        unnamed(`NumberElements/*/patterns/${format}%alphaNextToNumber`, `NumberElements/*/patterns/${format}%noCurrency`),
       ),
-      // unnamed, and DateFormatSymbols, which enumerates the table, skips them by their suffix.
-      ...["wide", "abbreviated", "narrow"].flatMap(width => leaveOut(`calendar/*/eras/${width}%variant`)),
+      ...unnamed("NumberElements/*/patternsShort/currencyFormat%alphaNextToNumber"),
+      // DateFormatSymbols, which enumerates the table, skips them by their suffix.
+      ...["wide", "abbreviated", "narrow"].flatMap(width => unnamed(`calendar/*/eras/${width}%variant`)),
       // unlinked: ulocdata_*, AlphabeticIndex.
       ...leaveOut("ExemplarCharacters", "AuxExemplarCharacters", "ExemplarCharactersIndex"),
       ...leaveOut("ExemplarCharactersNumbers", "ExemplarCharactersPunctuation", "delimiters", "Ellipsis"),
@@ -159,12 +165,11 @@ const TREES: Tree[] = [
       // without extensions, and of the keys' values only calendars.
       ...leaveOut("Keys", "Types"),
       "+/Types/calendar",
-      // unnamed
-      ...leaveOut("characterLabelPattern", "codePatterns"),
+      ...unnamed("characterLabelPattern", "codePatterns"),
       ...["long", "menu", "variant", "extension", "core", "secondary", "official"].flatMap(alt =>
-        leaveOut(`Languages%${alt}`),
+        unnamed(`Languages%${alt}`),
       ),
-      ...leaveOut("Scripts%variant", "Scripts%secondary", "Variants%secondary", "Types%variant"),
+      ...unnamed("Scripts%variant", "Scripts%secondary", "Variants%secondary", "Types%variant"),
       // unlinked: uloc_getDisplayScript.
       ...leaveOut("Scripts%stand-alone"),
     ],
@@ -173,8 +178,7 @@ const TREES: Tree[] = [
     dir: "region",
     out: "region",
     pool: true,
-    // unnamed
-    filter: () => leaveOut("Countries%variant", "Countries%chagos", "Countries%biot"),
+    filter: () => unnamed("Countries%variant", "Countries%chagos", "Countries%biot"),
   },
   { dir: "zone", out: "zone", pool: true, standalone: ["tzdbNames"] },
   {
@@ -200,8 +204,6 @@ const TREES: Tree[] = [
     out: "coll",
     pool: false,
     filter: () => [
-      // BUILDRULES.py's own default: the orders that mimic two legacy charsets.
-      ...leaveOut("collations/big5han", "collations/gb2312han"),
       // unlinked: ucol_getRulesEx(UCOL_FULL_RULES).
       ...leaveOut("UCARules"),
       // Rules for other tailorings to import, which genrb does from the text. Enumerating the types skips them.
@@ -223,8 +225,8 @@ const TREES: Tree[] = [
   },
   // Nothing in Bun calls RuleBasedNumberFormat, but ICU does: numberingSystems.res declares algorithmic numbering
   // systems whose rules are here, and SimpleDateFormat applies them for the number overrides CLDR attaches to
-  // calendar patterns (ja + japanese forces "y=jpanyear", zh + chinese carries "d=hanidays"). checkRbnf() derives
-  // this list from the data.
+  // calendar patterns (ja + japanese forces "y=jpanyear", zh + chinese carries "d=hanidays"). checkRbnf() checks
+  // this list against the data.
   { dir: "rbnf", out: "rbnf", pool: false, only: ["root", "ja", "zh", "zh_Hant"] },
 ];
 
@@ -236,25 +238,23 @@ const MISC_LEFT_OUT = new Set([
 ]);
 const MISC_FILTERS: Record<string, string[]> = {
   supplementalData: [
-    // unnamed
-    ...leaveOut(
+    ...unnamed(
       "subdivisionContainment",
       "territoryInfo",
       "languageData",
       "languageMatchingNew",
       "languageMatchingInfo",
     ),
-    ...leaveOut("codeMappingsCurrency", "parentLocales", "weekOfPreference", "personNamesDefaults", "weekData%variant"),
+    ...unnamed("codeMappingsCurrency", "parentLocales", "weekOfPreference", "personNamesDefaults", "weekData%variant"),
     // unlinked: ulocdata_*.
     ...leaveOut("measurementData"),
     // Only ever read under "region".
     ...leaveOut("idValidity"),
     "+/idValidity/region",
   ],
-  // unnamed
-  metadata: leaveOut("defaultContent"),
-  metaZones: leaveOut("metazoneIds"),
-  units: leaveOut("unitPrefixes", "unitIdComponents", "unitConstants"),
+  metadata: unnamed("defaultContent"),
+  metaZones: unnamed("metazoneIds"),
+  units: unnamed("unitPrefixes", "unitIdComponents", "unitConstants"),
 };
 
 /** Not locales, though they are named like them (BUILDRULES.py generate_tree, ICU-20628). */
@@ -446,6 +446,12 @@ function checkRbnf(): void {
   for (const [, locale] of text.matchAll(/desc\{"([A-Za-z_]+)\//g)) {
     if (!kept.has(locale!)) die(`numberingSystems.txt names rbnf/${locale}, which is not built`);
   }
+  // A bare ruleset is looked for in the bundle of the formatter's locale, and found in root's by fallback.
+  for (const locale of stems("rbnf")) {
+    if (locale !== "root" && read(join(dataDir, "rbnf", locale + ".txt")).includes("NumberingSystemRules")) {
+      die(`rbnf/${locale}.txt has NumberingSystemRules of its own`);
+    }
+  }
 }
 
 /**
@@ -454,10 +460,118 @@ function checkRbnf(): void {
  */
 function checkUnitCases(): void {
   const text = read(join(dataDir, "misc/grammaticalFeatures.txt"));
+  const found = new Set<string>();
   for (const [, cases] of text.matchAll(/\bcase\{\s*per\{([^}]*)\}/g)) {
     for (const [, unitCase] of cases!.matchAll(/"([a-z]+)"/g)) {
+      found.add(unitCase!);
       if (unitCase !== "compound" && unitCase !== "nominative" && !UNIT_CASES.includes(unitCase!)) {
         die(`grammaticalFeatures.txt puts part of a "per" unit in the ${unitCase}, which is not built`);
+      }
+    }
+  }
+  for (const unitCase of UNIT_CASES) {
+    if (!found.has(unitCase)) die(`grammaticalFeatures.txt puts no part of a "per" unit in the ${unitCase}`);
+  }
+}
+
+/** The paths of the resources that have keys in the source of a bundle, from below its root. */
+function resourcePaths(text: string, paths: Set<string>): void {
+  const stack: string[] = [];
+  let name = "";
+  for (const [token] of text.matchAll(/\/\/[^\n]*|\/\*[\s\S]*?\*\/|"(?:[^"\\]|\\.)*"|[{},]|[^\s{},"]+/g)) {
+    if (token === "{") {
+      // name:type{
+      stack.push(name.replace(/:.*/, ""));
+      if (stack.length > 1 && !stack.includes("", 1)) paths.add(stack.slice(1).join("/"));
+      name = "";
+    } else if (token === "}") {
+      stack.pop();
+      name = "";
+    } else if (token === ",") {
+      name = "";
+    } else if (!token.startsWith("//") && !token.startsWith("/*")) {
+      name = token.startsWith('"') ? token.slice(1, -1) : token;
+    }
+  }
+}
+
+/**
+ * Each rule has to apply to something in some bundle it is for.
+ * @param together rules that are made for each of many resources, of which only some have what the rule is about:
+ *                 those with the same result here have to apply to something between them
+ */
+function checkRules(where: string, files: string[], rules: string[], together = (rule: string) => rule): void {
+  const paths = new Set<string>();
+  for (const file of files) resourcePaths(read(file), paths);
+  const idle = new Set(rules.map(together));
+  for (const rule of rules) {
+    if (!idle.has(together(rule))) continue;
+    const path = rule.slice(2);
+    const pattern = new RegExp("^" + path.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/\*/g, "[^/]+") + "$");
+    if (path === DEPENDENCIES || (path.includes("*") ? [...paths].some(p => pattern.test(p)) : paths.has(path))) {
+      idle.delete(together(rule));
+    }
+  }
+  if (idle.size) die(`${where}: nothing there for the rules\n  ${[...idle].join("\n  ")}`);
+}
+
+function checkAllRules(): void {
+  for (const tree of TREES) {
+    if (tree.filter === undefined) continue;
+    const standalone = tree.standalone ?? [];
+    const files = (tree.only ?? stems(tree.dir).filter(l => !standalone.includes(l))).map(l => join(dataDir, tree.dir, l + ".txt"));
+    // Few units have forms for a case, and in few languages.
+    checkRules(tree.dir, files, tree.filter(), rule => rule.replace(/^(.\/)[^/]+\/[^/]+\/[^/]+(\/case\b.*)$/, "$1*/*/*$2"));
+  }
+  for (const [bundle, rules] of Object.entries(MISC_FILTERS)) {
+    checkRules(`misc/${bundle}`, [join(dataDir, "misc", bundle + ".txt")], rules);
+  }
+}
+
+/**
+ * No string in ICU4C's sources may have a key in it that is left out for being unnamed, or be the part of one after
+ * a %, which is what code that asks for an alternative appends. (This does not see a string that is spelled as numbers.)
+ */
+function checkUnnamed(): void {
+  const literals = new Set<string>();
+  for (const dir of ["common", "i18n"]) {
+    for (const file of readdirSync(join(sourceDir, dir))) {
+      if (!/\.(cpp|h)$/.test(file)) continue;
+      const tokens = read(join(sourceDir, dir, file)).matchAll(/\/\/[^\n]*|\/\*[\s\S]*?\*\/|"(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*'/g);
+      for (const [token] of tokens) if (token.startsWith('"')) literals.add(token.slice(1, -1));
+    }
+  }
+  for (const key of unnamedKeys) {
+    const alternative = key.includes("%") ? key.slice(key.indexOf("%")) : undefined;
+    for (const literal of literals) {
+      if (literal.includes(key) || literal === alternative) die(`"${literal}" in ICU4C's sources names ${key}, which is left out`);
+    }
+  }
+}
+
+/** What is under data/ and is not built, so that what is new there is noticed. */
+const NOT_BUILT: Record<string, string[]> = {
+  // See "Whole BUILDRULES.py categories" above. dtd and xml are not data. mappings has cnvalias's source, unidata UCARules.txt.
+  "": ["dtd", "mappings", "sprep", "translit", "unidata", "xml"],
+  // Compiled into the library as C arrays: nfc, pnames, ubidi, ucase, uprops. See COPIED for nfkc_*, above for unames.
+  in: ["nfc.nrm", "nfkc_cf.nrm", "nfkc_scf.nrm", "pnames.icu", "ubidi.icu", "ucase.icu", "unames.icu", "uprops.icu"],
+  "in/coll": ["ucadata-implicithan.icu", "ucadata-implicithan-icu4x.icu", "ucadata-unihan-icu4x.icu"],
+  brkitr: ["adaboost", "lstm"],
+};
+
+function checkInputs(): void {
+  const known: Record<string, string[]> = {
+    "": [...TREES.map(tree => tree.dir), "in", "misc"],
+    in: [...Object.values(COPIED).map(from => from.slice("in/".length)), "coll"],
+    "in/coll": [ROOT_COLLATION.slice("in/coll/".length)],
+    brkitr: ["dictionaries", "rules"],
+  };
+  for (const [dir, notBuilt] of Object.entries(NOT_BUILT)) {
+    for (const entry of readdirSync(join(dataDir, dir), { withFileTypes: true })) {
+      // The build files at the top, and the bundles' sources in brkitr, which are all built.
+      if ((dir === "" || dir === "brkitr") && !entry.isDirectory()) continue;
+      if (!known[dir]!.includes(entry.name) && !notBuilt.includes(entry.name)) {
+        die(`data/${join(dir, entry.name)} is neither built nor known to be left out`);
       }
     }
   }
@@ -526,8 +640,11 @@ function writePackage(): Buffer {
 
 rmSync(args.work!, { recursive: true, force: true });
 for (const tree of TREES) mkdirSync(join(outDir, tree.out), { recursive: true });
+checkInputs();
 checkRbnf();
 checkUnitCases();
+checkAllRules();
+checkUnnamed();
 
 for (const [to, from] of Object.entries(COPIED)) {
   inputs.add(join(dataDir, from));
