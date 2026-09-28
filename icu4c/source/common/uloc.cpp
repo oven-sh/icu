@@ -1167,41 +1167,77 @@ inline bool _isBCP47Extension(std::string_view p) {
            p[2] == '-';
 }
 
-/**
- * Lookup 'key' in the array 'list'.  The array 'list' should contain
- * a nullptr entry, followed by more entries, and a second nullptr entry.
- *
- * The 'list' param should be LANGUAGES, LANGUAGES_3, COUNTRIES, or
- * COUNTRIES_3.
- */
-std::optional<int16_t> _findIndex(const char* const* list, const char* key)
-{
-    const char* const* anchor = list;
-    int32_t pass = 0;
-
-    /* Make two passes through two nullptr-terminated arrays at 'list' */
-    while (pass++ < 2) {
-        while (*list) {
-            if (uprv_strcmp(key, *list) == 0) {
-                return static_cast<int16_t>(list - anchor);
-            }
-            list++;
-        }
-        ++list;     /* skip final nullptr *CWB*/
+/** A code of up to three characters as a number that is not 0, or 0 for any other string. */
+constexpr uint32_t _packCode(const char* code) {
+    uint32_t packed = 0;
+    for (int32_t i = 0; code[i] != 0; ++i) {
+        if (i == 3) { return 0; }
+        packed |= static_cast<uint32_t>(static_cast<uint8_t>(code[i])) << (8 * i);
     }
-    return std::nullopt;
+    return packed;
+}
+
+/** Where each of the codes in a list first occurs in it: a hash table, made by the compiler. */
+template<size_t N>
+struct CodeIndex {
+    static constexpr size_t capacity() {
+        size_t n = 4;
+        while (n < 2 * N) { n *= 2; }
+        return n;
+    }
+    static constexpr size_t slot(uint32_t packed) { return (packed * 0x9e3779b1u) & (capacity() - 1); }
+
+    uint32_t codes[capacity()] = {};
+    int16_t indexes[capacity()] = {};
+    bool allFit = true;
+
+    constexpr explicit CodeIndex(const char* const (&list)[N]) {
+        for (size_t i = 0; i < N; ++i) {
+            if (list[i] == nullptr) { continue; }
+            uint32_t packed = _packCode(list[i]);
+            if (packed == 0) { allFit = false; }
+            size_t at = slot(packed);
+            while (codes[at] != 0 && codes[at] != packed) { at = (at + 1) & (capacity() - 1); }
+            if (codes[at] != 0) { continue; }
+            codes[at] = packed;
+            indexes[at] = static_cast<int16_t>(i);
+        }
+    }
+
+    std::optional<int16_t> find(const char* key) const {
+        uint32_t packed = _packCode(key);
+        if (packed == 0) { return std::nullopt; }
+        for (size_t at = slot(packed); codes[at] != 0; at = (at + 1) & (capacity() - 1)) {
+            if (codes[at] == packed) { return indexes[at]; }
+        }
+        return std::nullopt;
+    }
+};
+
+/**
+ * Lookup 'key' in the array LIST, which should be LANGUAGES, LANGUAGES_3, COUNTRIES,
+ * COUNTRIES_3 or one of the DEPRECATED_ arrays: codes, a nullptr entry, more codes, and a second nullptr entry.
+ *
+ * Every locale ID with a three-letter language is looked up in LANGUAGES_3, each time it is parsed.
+ */
+template<auto& LIST>
+std::optional<int16_t> _findIndex(const char* key)
+{
+    static constexpr CodeIndex INDEX(LIST);
+    static_assert(INDEX.allFit);
+    return INDEX.find(key);
 }
 
 }  // namespace
 
 U_CFUNC const char*
 uloc_getCurrentCountryID(const char* oldID){
-    std::optional<int16_t> offset = _findIndex(DEPRECATED_COUNTRIES, oldID);
+    std::optional<int16_t> offset = _findIndex<DEPRECATED_COUNTRIES>(oldID);
     return offset.has_value() ? REPLACEMENT_COUNTRIES[*offset] : oldID;
 }
 U_CFUNC const char*
 uloc_getCurrentLanguageID(const char* oldID){
-    std::optional<int16_t> offset = _findIndex(DEPRECATED_LANGUAGES, oldID);
+    std::optional<int16_t> offset = _findIndex<DEPRECATED_LANGUAGES>(oldID);
     return offset.has_value() ? REPLACEMENT_LANGUAGES[*offset] : oldID;
 }
 
@@ -1261,7 +1297,7 @@ size_t _getLanguage(std::string_view localeID, ByteSink* sink, UErrorCode& statu
         /* convert 3 character code to 2 character code if possible *CWB*/
         U_ASSERT(capacity >= 4);
         buffer[3] = '\0';
-        std::optional<int16_t> offset = _findIndex(LANGUAGES_3, buffer);
+        std::optional<int16_t> offset = _findIndex<LANGUAGES_3>(buffer);
         if (offset.has_value()) {
             const char* const alias = LANGUAGES[*offset];
             sink->Append(alias, static_cast<int32_t>(uprv_strlen(alias)));
@@ -1330,7 +1366,7 @@ size_t _getRegion(std::string_view localeID, ByteSink* sink) {
         /* convert 3 character code to 2 character code if possible *CWB*/
         U_ASSERT(capacity >= 4);
         buffer[3] = '\0';
-        std::optional<int16_t> offset = _findIndex(COUNTRIES_3, buffer);
+        std::optional<int16_t> offset = _findIndex<COUNTRIES_3>(buffer);
         if (offset.has_value()) {
             const char* const alias = COUNTRIES[*offset];
             sink->Append(alias, static_cast<int32_t>(uprv_strlen(alias)));
@@ -2256,7 +2292,7 @@ uloc_getISO3Language(const char* localeID)
     CharString lang = ulocimp_getLanguage(localeID, err);
     if (U_FAILURE(err))
         return "";
-    std::optional<int16_t> offset = _findIndex(LANGUAGES, lang.data());
+    std::optional<int16_t> offset = _findIndex<LANGUAGES>(lang.data());
     return offset.has_value() ? LANGUAGES_3[*offset] : "";
 }
 
@@ -2272,7 +2308,7 @@ uloc_getISO3Country(const char* localeID)
     CharString cntry = ulocimp_getRegion(localeID, err);
     if (U_FAILURE(err))
         return "";
-    std::optional<int16_t> offset = _findIndex(COUNTRIES, cntry.data());
+    std::optional<int16_t> offset = _findIndex<COUNTRIES>(cntry.data());
     return offset.has_value() ? COUNTRIES_3[*offset] : "";
 }
 

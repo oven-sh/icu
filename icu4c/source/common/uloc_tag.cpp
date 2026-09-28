@@ -1043,14 +1043,11 @@ _initializeULanguageTag(ULanguageTag* langtag) {
 }
 
 void
-_appendLanguageToLanguageTag(std::string_view localeID, icu::ByteSink& sink, bool strict, UErrorCode& status) {
-    UErrorCode tmpStatus = U_ZERO_ERROR;
-
+_appendLanguageToLanguageTag(const icu::CharString& buf, UErrorCode tmpStatus, icu::ByteSink& sink, bool strict, UErrorCode& status) {
     if (U_FAILURE(status)) {
         return;
     }
 
-    icu::CharString buf = ulocimp_getLanguage(localeID, tmpStatus);
     if (U_FAILURE(tmpStatus)) {
         if (strict) {
             status = U_ILLEGAL_ARGUMENT_ERROR;
@@ -1071,16 +1068,17 @@ _appendLanguageToLanguageTag(std::string_view localeID, icu::ByteSink& sink, boo
         sink.Append(LANG_UND, LANG_UND_LEN);
     } else {
         /* resolve deprecated */
-        for (int32_t i = 0; i < UPRV_LENGTHOF(DEPRECATEDLANGS); i += 2) {
-            // 2-letter deprecated subtags are listede before 3-letter
-            // ones in DEPRECATEDLANGS[]. Get out of loop on coming
-            // across the 1st 3-letter subtag, if the input is a 2-letter code.
-            // to avoid continuing to try when there's no match.
-            if (buf.length() < static_cast<int32_t>(uprv_strlen(DEPRECATEDLANGS[i]))) break;
-            if (uprv_compareInvCharsAsAscii(buf.data(), DEPRECATEDLANGS[i]) == 0) {
-                const char* const resolved = DEPRECATEDLANGS[i + 1];
-                sink.Append(resolved, static_cast<int32_t>(uprv_strlen(resolved)));
-                return;
+        // Each of DEPRECATEDLANGS[] is four bytes, the code and NULs. Compared as such, not as a string:
+        // there are many, and most languages are compared with all of them.
+        char code[sizeof(DEPRECATEDLANGS[0])] = {};
+        if (buf.length() < static_cast<int32_t>(sizeof(code))) {
+            uprv_memcpy(code, buf.data(), buf.length());
+            for (int32_t i = 0; i < UPRV_LENGTHOF(DEPRECATEDLANGS); i += 2) {
+                if (uprv_memcmp(code, DEPRECATEDLANGS[i], sizeof(code)) == 0) {
+                    const char* const resolved = DEPRECATEDLANGS[i + 1];
+                    sink.Append(resolved, static_cast<int32_t>(uprv_strlen(resolved)));
+                    return;
+                }
             }
         }
         sink.Append(buf.data(), buf.length());
@@ -1088,14 +1086,11 @@ _appendLanguageToLanguageTag(std::string_view localeID, icu::ByteSink& sink, boo
 }
 
 void
-_appendScriptToLanguageTag(std::string_view localeID, icu::ByteSink& sink, bool strict, UErrorCode& status) {
-    UErrorCode tmpStatus = U_ZERO_ERROR;
-
+_appendScriptToLanguageTag(const icu::CharString& buf, UErrorCode tmpStatus, icu::ByteSink& sink, bool strict, UErrorCode& status) {
     if (U_FAILURE(status)) {
         return;
     }
 
-    icu::CharString buf = ulocimp_getScript(localeID, tmpStatus);
     if (U_FAILURE(tmpStatus)) {
         if (strict) {
             status = U_ILLEGAL_ARGUMENT_ERROR;
@@ -1118,14 +1113,11 @@ _appendScriptToLanguageTag(std::string_view localeID, icu::ByteSink& sink, bool 
 }
 
 void
-_appendRegionToLanguageTag(std::string_view localeID, icu::ByteSink& sink, bool strict, UErrorCode& status) {
-    UErrorCode tmpStatus = U_ZERO_ERROR;
-
+_appendRegionToLanguageTag(const icu::CharString& buf, UErrorCode tmpStatus, icu::ByteSink& sink, bool strict, UErrorCode& status) {
     if (U_FAILURE(status)) {
         return;
     }
 
-    icu::CharString buf = ulocimp_getRegion(localeID, tmpStatus);
     if (U_FAILURE(tmpStatus)) {
         if (strict) {
             status = U_ILLEGAL_ARGUMENT_ERROR;
@@ -2645,9 +2637,30 @@ ulocimp_toLanguageTag(const char* localeID,
         }
     }
 
-    _appendLanguageToLanguageTag(canonical.toStringPiece(), sink, strict, status);
-    _appendScriptToLanguageTag(canonical.toStringPiece(), sink, strict, status);
-    _appendRegionToLanguageTag(canonical.toStringPiece(), sink, strict, status);
+    // Whoever lists the available locales calls this for each. So the ID is parsed once for all of its subtags.
+    // If that succeeds, then so would parsing it for each, up to where that one ends, and with the same result.
+    icu::CharString language, script, region, variant;
+    tmpStatus = U_ZERO_ERROR;
+    ulocimp_getSubtags(canonical.toStringPiece(), &language, &script, &region, &variant, nullptr, tmpStatus);
+    if (U_SUCCESS(tmpStatus) && tmpStatus != U_STRING_NOT_TERMINATED_WARNING) {
+        _appendLanguageToLanguageTag(language, U_ZERO_ERROR, sink, strict, status);
+        _appendScriptToLanguageTag(script, U_ZERO_ERROR, sink, strict, status);
+        _appendRegionToLanguageTag(region, U_ZERO_ERROR, sink, strict, status);
+        // Without a variant there is none to append, as such or for private use, and none that is POSIX.
+        // Without either that or keywords there are no extensions.
+        if (variant.isEmpty() && pKeywordStart == nullptr) { return; }
+    } else {
+        auto part = [&](icu::CharString (*get)(std::string_view, UErrorCode&)) {
+            tmpStatus = U_ZERO_ERROR;
+            return get(canonical.toStringPiece(), tmpStatus);
+        };
+        language = part(ulocimp_getLanguage);
+        _appendLanguageToLanguageTag(language, tmpStatus, sink, strict, status);
+        script = part(ulocimp_getScript);
+        _appendScriptToLanguageTag(script, tmpStatus, sink, strict, status);
+        region = part(ulocimp_getRegion);
+        _appendRegionToLanguageTag(region, tmpStatus, sink, strict, status);
+    }
     _appendVariantsToLanguageTag(canonical.toStringPiece(), sink, strict, hadPosix, status);
     _appendKeywordsToLanguageTag(canonical.data(), sink, strict, hadPosix, status);
     _appendPrivateuseToLanguageTag(canonical.toStringPiece(), sink, strict, hadPosix, status);
