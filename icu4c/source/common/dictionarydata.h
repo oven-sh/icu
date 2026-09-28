@@ -33,6 +33,8 @@ class U_COMMON_API DictionaryData : public UMemory {
 public:
     static const int32_t TRIE_TYPE_BYTES; // = 0;
     static const int32_t TRIE_TYPE_UCHARS; // = 1;
+    /** oven-sh/icu: see SuccinctDictionaryMatcher. */
+    static const int32_t TRIE_TYPE_SUCCINCT; // = 2;
     static const int32_t TRIE_TYPE_MASK; // = 7;
     static const int32_t TRIE_HAS_VALUES; // = 8;
 
@@ -115,6 +117,63 @@ private:
 };
 
 // Implementation of the DictionaryMatcher interface for a BytesTrie dictionary
+/**
+ * oven-sh/icu: A dictionary with values of 0..255, in about half of what it takes as a UCharsTrie.
+ * Written by bun/data/icu-dict.ts from what gendict --uchars writes.
+ *
+ * A UTF-16 unit is a byte if it is one of the S most frequent, by its place in the order of frequency, else two bytes:
+ * with i its place less S, S+(i>>8) and i&0xff. The dictionary is a trie of the words as such bytes.
+ * Its nodes, but for the root, are numbered level by level, and on a level in the order of the words,
+ * so that the children of a node, a group, follow each other, in the order of their bytes,
+ * and the groups follow each other in the order of the nodes whose children they are.
+ * So the children of a node are the group with the number of nodes before it that have children, plus 1 for the root's.
+ * Nothing says where any node is.
+ *
+ * int32_t header[8]: the number of nodes, S, then the offsets in bytes from the header, multiples of 8, of
+ * - uint16_t unitIndex[0x400]; uint16_t unitBlocks[][64]: unitBlocks[unitIndex[c>>6]][c&63] is
+ *   the place of c in the order of frequency plus 1, or 0 if no word has it
+ * - uint8_t labels[]: for each node, the byte that leads to it. A group of 32 nodes or more has, where its first 32 labels
+ *   would be, a bit for each byte there is: bit b&7 of byte b>>3 is set if the group has a node for b.
+ *   There are 8 more bytes than nodes.
+ * - Block blocks[]: for each 64 nodes, and one more whose isLast is all ones
+ * - uint8_t values[]: for each node that is a word, in the order of the nodes
+ */
+class U_COMMON_API SuccinctDictionaryMatcher : public DictionaryMatcher {
+public:
+    // The UDataMemory * will be closed on this object's destruction.
+    SuccinctDictionaryMatcher(const uint8_t *data, UDataMemory *f);
+    virtual ~SuccinctDictionaryMatcher();
+    virtual int32_t matches(UText *text, int32_t maxLength, int32_t limit,
+                            int32_t *lengths, int32_t *cpLengths, int32_t *values,
+                            int32_t *prefix) const override;
+    virtual int32_t getType() const override;
+private:
+    /** What there is to know about 64 nodes but their labels. Node n has bit n&63. */
+    struct Block {
+        uint64_t hasChildren;
+        /** The node is the last of its group. */
+        uint64_t isLast;
+        uint64_t isWord;
+        /** The first child of the first of these nodes, or of the ones after them, that has children. */
+        uint32_t firstChild;
+        /** How many of the nodes before these are words. */
+        uint32_t words;
+    };
+
+    /** The one with this label of the group that starts with the node `first`, or -1. */
+    inline int32_t find(int32_t first, uint32_t label) const;
+    /** The first of the children of a node that has some. */
+    inline int32_t firstChild(int32_t node) const;
+
+    uint32_t singles;
+    const uint16_t *unitIndex;
+    const uint16_t *unitBlocks;
+    const uint8_t *labels;
+    const Block *blocks;
+    const uint8_t *wordValues;
+    UDataMemory *file;
+};
+
 class U_COMMON_API BytesDictionaryMatcher : public DictionaryMatcher {
 public:
     // constructs a new BytesTrieDictionaryMatcher
