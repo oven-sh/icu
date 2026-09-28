@@ -1294,6 +1294,7 @@ addCollation(ParseState* state, TableResource  *result, const char *collationTyp
     const icu::CollationTailoring *base = icu::CollationRoot::getRoot(intStatus);
     if(U_FAILURE(intStatus)) {
         error(line, "failed to load root collator (ucadata.icu) - %s", u_errorName(intStatus));
+        *status = intStatus;
         res_close(result);
         return nullptr;  // TODO: use LocalUResourceBundlePointer for result
     }
