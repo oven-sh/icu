@@ -299,18 +299,6 @@ static UBool mayHaveParent(char *name) {
 }
 
 /**
- *  Internal function
- */
-static void entryIncrease(UResourceDataEntry *entry) {
-    Mutex lock(&resbMutex);
-    entry->fCountExisting++;
-    while(entry->fParent != nullptr) {
-      entry = entry->fParent;
-      entry->fCountExisting++;
-    }
-}
-
-/**
  *  Internal function. Tries to find a resource in given Resource
  *  Bundle, as well as in its parents
  */
@@ -358,7 +346,6 @@ static UResourceDataEntry *getFallbackData(
 
 static void
 free_entry(UResourceDataEntry *entry) {
-    UResourceDataEntry *alias;
     res_unload(&(entry->fData));
     if(entry->fName != nullptr && entry->fName != entry->fNameBuffer) {
         uprv_free(entry->fName);
@@ -366,66 +353,26 @@ free_entry(UResourceDataEntry *entry) {
     if(entry->fPath != nullptr) {
         uprv_free(entry->fPath);
     }
-    if(entry->fPool != nullptr) {
-        --entry->fPool->fCountExisting;
-    }
-    alias = entry->fAlias;
-    if(alias != nullptr) {
-        while(alias->fAlias != nullptr) {
-            alias = alias->fAlias;
-        }
-        --alias->fCountExisting;
-    }
     uprv_free(entry);
 }
 
-/* Works just like ucnv_flushCache() */
-static int32_t ures_flushCache()
+/*
+ * An entry stays in the cache, and where it is, until u_cleanup(), by when whatever uses it has to be closed.
+ * So bundles do not count how many of them use an entry, for which each would lock resbMutex when it is made and closed.
+ */
+static void ures_flushCache()
 {
-    UResourceDataEntry *resB;
-    int32_t pos;
-    int32_t rbDeletedNum = 0;
-    const UHashElement *e;
-    UBool deletedMore;
-
-    /*if shared data hasn't even been lazy evaluated yet
-    * return 0
-    */
     Mutex lock(&resbMutex);
     if (cache == nullptr) {
-        return 0;
+        return;
     }
-
-    do {
-        deletedMore = false;
-        /*creates an enumeration to iterate through every element in the table */
-        pos = UHASH_FIRST;
-        while ((e = uhash_nextElement(cache, &pos)) != nullptr)
-        {
-            resB = static_cast<UResourceDataEntry*>(e->value.pointer);
-            /* Deletes only if reference counter == 0
-             * Don't worry about the children of this node.
-             * Those will eventually get deleted too, if not already.
-             * Don't worry about the parents of this node.
-             * Those will eventually get deleted too, if not already.
-             */
-            /* 04/05/2002 [weiv] fCountExisting should now be accurate. If it's not zero, that means that    */
-            /* some resource bundles are still open somewhere. */
-
-            if (resB->fCountExisting == 0) {
-                rbDeletedNum++;
-                deletedMore = true;
-                uhash_removeElement(cache, e);
-                free_entry(resB);
-            }
-        }
-        /*
-         * Do it again to catch bundles (aliases, pool bundle) whose fCountExisting
-         * got decremented by free_entry().
-         */
-    } while(deletedMore);
-
-    return rbDeletedNum;
+    int32_t pos = UHASH_FIRST;
+    const UHashElement *e;
+    while ((e = uhash_nextElement(cache, &pos)) != nullptr) {
+        UResourceDataEntry *resB = static_cast<UResourceDataEntry*>(e->value.pointer);
+        uhash_removeElement(cache, e);
+        free_entry(resB);
+    }
 }
 
 #ifdef URES_DEBUG
@@ -446,9 +393,9 @@ U_CAPI UBool U_EXPORT2 ures_dumpCacheContents() {
     while ((e = uhash_nextElement(cache, &pos)) != nullptr) {
       cacheNotEmpty=true;
       resB = (UResourceDataEntry *) e->value.pointer;
-      fprintf(stderr,"%s:%d: RB Cache: Entry @0x%p, refcount %d, name %s:%s.  Pool 0x%p, alias 0x%p, parent 0x%p\n",
+      fprintf(stderr,"%s:%d: RB Cache: Entry @0x%p, name %s:%s.  Pool 0x%p, alias 0x%p, parent 0x%p\n",
               __FILE__, __LINE__,
-              (void*)resB, resB->fCountExisting,
+              (void*)resB,
               resB->fName?resB->fName:"nullptr",
               resB->fPath?resB->fPath:"nullptr",
               (void*)resB->fPool,
@@ -637,7 +584,6 @@ static UResourceDataEntry *init_entry(const char *localeID, const char *path, UE
         while(r->fAlias != nullptr) {
             r = r->fAlias;
         }
-        r->fCountExisting++; /* we increase its reference count */
         /* if the resource has a warning */
         /* we don't want to overwrite a status with no error */
         if(r->fBogus != U_ZERO_ERROR && U_SUCCESS(*status)) {
@@ -683,8 +629,6 @@ findFirstExisting(const char* path, char* name, const char* defaultLocale, UResO
             /* not to be used - as there might be parent   */
             /* lines in cache from previous openings that  */
             /* are not updated yet. */
-            r->fCountExisting--;
-            /*entryCloseInt(r);*/
             r = nullptr;
             *status = U_USING_FALLBACK_WARNING;
         } else {
@@ -783,10 +727,6 @@ loadParentsExceptRoot(UResourceDataEntry *&t1,
             u2->fParent = t2;
         } else {
             t1->fParent = t2;
-            if (usingUSRData) {
-                // The USR override data wasn't found, set it to be deleted.
-                u2->fCountExisting = 0;
-            }
         }
         t1 = t2;
         checkParent = chopLocale(name) || mayHaveParent(name);
@@ -873,9 +813,6 @@ static UResourceDataEntry *entryOpen(const char* path, const char* localeID,
                 if(u1->fBogus == U_ZERO_ERROR) {
                     u1->fParent = t1;
                     r = u1;
-                } else {
-                    /* the USR override data wasn't found, set it to be deleted */
-                    u1->fCountExisting = 0;
                 }
             }
         }
@@ -939,12 +876,6 @@ static UResourceDataEntry *entryOpen(const char* path, const char* localeID,
         }
     }
 
-    // TODO: Does this ever loop?
-    while(r != nullptr && !isRoot && t1->fParent != nullptr) {
-        t1->fParent->fCountExisting++;
-        t1 = t1->fParent;
-    }
-
 finish:
     if(U_SUCCESS(*status)) {
         if(intStatus != U_ZERO_ERROR) {
@@ -984,7 +915,6 @@ entryOpenDirect(const char* path, const char* localeID, UErrorCode* status) {
     UResourceDataEntry *r = init_entry(localeID, path, status);
     if(U_SUCCESS(*status)) {
         if(r->fBogus != U_ZERO_ERROR) {
-            r->fCountExisting--;
             r = nullptr;
         }
     } else {
@@ -1010,57 +940,7 @@ entryOpenDirect(const char* path, const char* localeID, UErrorCode* status) {
         }
     }
 
-    if(r != nullptr) {
-        // TODO: Does this ever loop?
-        while(t1->fParent != nullptr) {
-            t1->fParent->fCountExisting++;
-            t1 = t1->fParent;
-        }
-    }
     return r;
-}
-
-/**
- * Functions to create and destroy resource bundles.
- *     CAUTION:  resbMutex must be locked when calling this function.
- */
-/* INTERNAL: */
-static void entryCloseInt(UResourceDataEntry *resB) {
-    UResourceDataEntry *p = resB;
-
-    while(resB != nullptr) {
-        p = resB->fParent;
-        resB->fCountExisting--;
-
-        /* Entries are left in the cache. TODO: add ures_flushCache() to force a flush
-         of the cache. */
-/*
-        if(resB->fCountExisting <= 0) {
-            uhash_remove(cache, resB);
-            if(resB->fBogus == U_ZERO_ERROR) {
-                res_unload(&(resB->fData));
-            }
-            if(resB->fName != nullptr) {
-                uprv_free(resB->fName);
-            }
-            if(resB->fPath != nullptr) {
-                uprv_free(resB->fPath);
-            }
-            uprv_free(resB);
-        }
-*/
-
-        resB = p;
-    }
-}
-
-/** 
- *  API: closes a resource bundle and cleans up.
- */
-
-static void entryClose(UResourceDataEntry *resB) {
-  Mutex lock(&resbMutex);
-  entryCloseInt(resB);
 }
 
 /*
@@ -1122,9 +1002,6 @@ static void
 ures_closeBundle(UResourceBundle* resB, UBool freeBundleObj)
 {
     if(resB != nullptr) {
-        if(resB->fData != nullptr) {
-            entryClose(resB->fData);
-        }
         if(resB->fVersion != nullptr) {
             uprv_free(resB->fVersion);
         }
@@ -1158,7 +1035,6 @@ UResourceBundle *init_resb_result(
 
 // TODO: Try to refactor further, so that we output a dataEntry + Resource + (optionally) resPath,
 // rather than a UResourceBundle.
-// May need to entryIncrease() the resulting dataEntry.
 UResourceBundle *getAliasTargetAsResourceBundle(
         const ResourceData &resData, Resource r, const char *key, int32_t idx,
         UResourceDataEntry *validLocaleDataEntry, const char *containerResPath,
@@ -1415,9 +1291,6 @@ UResourceBundle *init_resb_result(
         resB->fResPath = nullptr;
         resB->fResPathLen = 0;
     } else {
-        if(resB->fData != nullptr) {
-            entryClose(resB->fData);
-        }
         if(resB->fVersion != nullptr) {
             uprv_free(resB->fVersion);
         }
@@ -1437,7 +1310,6 @@ UResourceBundle *init_resb_result(
         }
     }
     resB->fData = dataEntry;
-    entryIncrease(resB->fData);
     resB->fHasFallback = false;
     resB->fIsTopLevel = false;
     resB->fIndex = -1;
@@ -1510,9 +1382,6 @@ UResourceBundle *ures_copyResb(UResourceBundle *r, const UResourceBundle *origin
             ures_appendResPath(r, original->fResPath, original->fResPathLen, status);
         }
         ures_setIsStackObject(r, isStackObject);
-        if(r->fData != nullptr) {
-            entryIncrease(r->fData);
-        }
     }
     return r;
 }
@@ -2311,7 +2180,6 @@ void getAllItemsWithFallback(
         parentRef.fRes = parentRef.getResData().rootRes;
         parentRef.fSize = res_countArrayItems(&parentRef.getResData(), parentRef.fRes);
         parentRef.fIndex = -1;
-        entryIncrease(parentEntry);
 
         // Look up the container item in the parent bundle.
         StackUResourceBundle containerBundle;
@@ -2741,7 +2609,6 @@ ures_openWithType(UResourceBundle *r, const char* path, const char* localeID,
     if(r == nullptr) {
         r = static_cast<UResourceBundle*>(uprv_malloc(sizeof(UResourceBundle)));
         if(r == nullptr) {
-            entryClose(entry);
             *status = U_MEMORY_ALLOCATION_ERROR;
             return nullptr;
         }

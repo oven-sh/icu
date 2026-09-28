@@ -51,7 +51,6 @@ struct UResourceDataEntry {
     UResourceDataEntry *fPool;
     ResourceData fData; /* data for low level access */
     char fNameBuffer[3]; /* A small buffer of free space for fName. The free space is due to struct padding. */
-    uint32_t fCountExisting; /* how much is this resource used */
     UErrorCode fBogus;
     /* int32_t fHashKey;*/ /* for faster access in the hashtable */
 };
@@ -69,7 +68,7 @@ struct UResourceBundle {
     /**
      * The dataEntry for the actual locale in which this item lives.
      * Used for accessing the item's data.
-     * Non-const pointer for reference counting via entryIncrease().
+     * Non-const, as everything else that points to an entry is.
      */
     UResourceDataEntry *fData; /*for low-level access*/
     char *fVersion;
