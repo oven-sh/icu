@@ -251,8 +251,8 @@ RuleBasedCollator::operator==(const Collator& other) const {
     UBool otherIsRoot = o.data->base == nullptr;
     U_ASSERT(!thisIsRoot || !otherIsRoot);  // otherwise their data pointers should be ==
     if(thisIsRoot != otherIsRoot) { return false; }
-    if((thisIsRoot || !tailoring->rules.isEmpty()) &&
-            (otherIsRoot || !o.tailoring->rules.isEmpty())) {
+    if((thisIsRoot || tailoring->hasRules()) &&
+            (otherIsRoot || o.tailoring->hasRules())) {
         // Shortcut: If both collators have valid rule strings, then compare those.
         if(tailoring->rules == o.tailoring->rules) { return true; }
     }

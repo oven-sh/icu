@@ -126,6 +126,11 @@ CollationLoader::loadRules(const char *localeID, const char *collationType,
     int32_t length;
     const char16_t *s =  ures_getStringByKey(data.getAlias(), "Sequence", &length, &errorCode);
     if(U_FAILURE(errorCode)) { return; }
+    if(CollationTailoring::areOmittedRules(s, length)) {
+        // As when the data has no rules at all.
+        errorCode = U_MISSING_RESOURCE_ERROR;
+        return;
+    }
 
     // No string pointer aliasing so that we need not hold onto the resource bundle.
     rules.setTo(s, length);

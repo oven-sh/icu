@@ -1248,7 +1248,7 @@ addCollation(ParseState* state, TableResource  *result, const char *collationTyp
             // oven-sh/icu: Something is left of them. Whether ucol_getRules() returns anything
             // is how JavaScriptCore tells a tailoring from the root collator.
             if(state->omitCollationRules && !rules.isEmpty()) {
-                sr->fString.setTo(u' ');
+                sr->fString.setTo(icu::CollationTailoring::OMITTED_RULES);
             }
             result->add(member, line, *status);
             member = nullptr;

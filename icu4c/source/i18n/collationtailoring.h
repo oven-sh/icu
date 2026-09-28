@@ -67,6 +67,15 @@ struct U_I18N_API_CLASS CollationTailoring : public SharedObject {
     // data for sorting etc.
     const CollationData *data;  // == base data or ownedData
     const CollationSettings *settings;  // reference-counted
+    /**
+     * oven-sh/icu: What genrb --omitCollationRules leaves of a tailoring's rules, so that ucol_getRules() still tells
+     * a tailoring from the root collator. It says nothing about the tailoring, and no rules consist of it.
+     */
+    static constexpr char16_t OMITTED_RULES = u' ';
+    static UBool areOmittedRules(const char16_t *s, int32_t length) { return length == 1 && s[0] == OMITTED_RULES; }
+    /** Whether there are rules that this was, or could be, built from. */
+    UBool hasRules() const { return !rules.isEmpty() && !areOmittedRules(rules.getBuffer(), rules.length()); }
+
     UnicodeString rules;
     // The locale is bogus when built from rules or constructed from a binary blob.
     // It can then be set by the service registration code which is thread-safe.
