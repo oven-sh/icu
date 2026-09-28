@@ -137,6 +137,11 @@ static int32_t LEN_CANONICAL_SYSTEM_ZONES = 0;
 static int32_t LEN_CANONICAL_SYSTEM_LOCATION_ZONES = 0;
 
 static icu::UInitOnce gSystemZonesInitOnce {};
+
+// zoneinfo64's Names and Zones. Opened once: whoever lists the time zones has each of them looked up several times.
+static UResourceBundle *gNames = nullptr;
+static UResourceBundle *gZones = nullptr;
+static icu::UInitOnce gNamesAndZonesInitOnce {};
 static icu::UInitOnce gCanonicalZonesInitOnce {};
 static icu::UInitOnce gCanonicalLocationZonesInitOnce {};
 
@@ -158,6 +163,11 @@ static UBool U_CALLCONV timeZone_cleanup()
     uprv_memset(TZDATA_VERSION, 0, sizeof(TZDATA_VERSION));
     gTZDataVersionInitOnce.reset();
 
+    ures_close(gNames);
+    ures_close(gZones);
+    gNames = gZones = nullptr;
+    gNamesAndZonesInitOnce.reset();
+
     LEN_SYSTEM_ZONES = 0;
     uprv_free(MAP_SYSTEM_ZONES);
     MAP_SYSTEM_ZONES = nullptr;
@@ -178,6 +188,13 @@ static UBool U_CALLCONV timeZone_cleanup()
 U_CDECL_END
 
 U_NAMESPACE_BEGIN
+
+static void U_CALLCONV initNamesAndZones(UErrorCode &ec) {
+    ucln_i18n_registerCleanup(UCLN_I18N_TIMEZONE, timeZone_cleanup);
+    LocalUResourceBundlePointer top(ures_openDirect(nullptr, kZONEINFO, &ec));
+    gNames = ures_getByKey(top.getAlias(), kNAMES, nullptr, &ec);
+    gZones = ures_getByKey(top.getAlias(), kZONES, nullptr, &ec);
+}
 
 static int32_t findInStringArray(UResourceBundle* array, const UnicodeString& id, UErrorCode &status)
 {
@@ -1097,17 +1114,14 @@ const char16_t*
 TimeZone::findID(const UnicodeString& id) {
     const char16_t *result = nullptr;
     UErrorCode ec = U_ZERO_ERROR;
-    UResourceBundle *rb = ures_openDirect(nullptr, kZONEINFO, &ec);
+    umtx_initOnce(gNamesAndZonesInitOnce, &initNamesAndZones, ec);
 
     // resolve zone index by name
-    UResourceBundle *names = ures_getByKey(rb, kNAMES, nullptr, &ec);
-    int32_t idx = findInStringArray(names, id, ec);
-    result = ures_getStringByIndex(names, idx, nullptr, &ec);
+    int32_t idx = findInStringArray(gNames, id, ec);
+    result = ures_getStringByIndex(gNames, idx, nullptr, &ec);
     if (U_FAILURE(ec)) {
         result = nullptr;
     }
-    ures_close(names);
-    ures_close(rb);
     return result;
 }
 
@@ -1116,30 +1130,27 @@ const char16_t*
 TimeZone::dereferOlsonLink(const UnicodeString& id) {
     const char16_t *result = nullptr;
     UErrorCode ec = U_ZERO_ERROR;
-    UResourceBundle *rb = ures_openDirect(nullptr, kZONEINFO, &ec);
+    umtx_initOnce(gNamesAndZonesInitOnce, &initNamesAndZones, ec);
 
     // resolve zone index by name
-    UResourceBundle *names = ures_getByKey(rb, kNAMES, nullptr, &ec);
-    int32_t idx = findInStringArray(names, id, ec);
-    result = ures_getStringByIndex(names, idx, nullptr, &ec);
+    int32_t idx = findInStringArray(gNames, id, ec);
+    result = ures_getStringByIndex(gNames, idx, nullptr, &ec);
 
     // open the zone bundle by index
-    ures_getByKey(rb, kZONES, rb, &ec);
-    ures_getByIndex(rb, idx, rb, &ec); 
+    StackUResourceBundle zone;
+    UResourceBundle *rb = zone.getAlias();
+    ures_getByIndex(gZones, idx, rb, &ec);
 
     if (U_SUCCESS(ec)) {
         if (ures_getType(rb) == URES_INT) {
             // this is a link - dereference the link
             int32_t deref = ures_getInt(rb, &ec);
-            const char16_t* tmp = ures_getStringByIndex(names, deref, nullptr, &ec);
+            const char16_t* tmp = ures_getStringByIndex(gNames, deref, nullptr, &ec);
             if (U_SUCCESS(ec)) {
                 result = tmp;
             }
         }
     }
-
-    ures_close(names);
-    ures_close(rb);
 
     return result;
 }

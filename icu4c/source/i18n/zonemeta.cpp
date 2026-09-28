@@ -34,6 +34,11 @@ static icu::UMutex gZoneMetaLock;
 
 // CLDR Canonical ID mapping table
 static UHashtable *gCanonicalIDCache = nullptr;
+// keyTypeData's tables for time zones. Opened once, with the cache: whoever lists the time zones asks about each of them.
+// nullptr if there is none, which fails a lookup as not finding the table did.
+static UResourceBundle *gTypeMap = nullptr;
+static UResourceBundle *gTypeAlias = nullptr;
+static UResourceBundle *gIanaMap = nullptr;
 static icu::UInitOnce gCanonicalIDCacheInitOnce {};
 
 // Metazone mapping table
@@ -61,6 +66,10 @@ static UBool U_CALLCONV zoneMeta_cleanup()
         uhash_close(gCanonicalIDCache);
         gCanonicalIDCache = nullptr;
     }
+    ures_close(gTypeMap);
+    ures_close(gTypeAlias);
+    ures_close(gIanaMap);
+    gTypeMap = gTypeAlias = gIanaMap = nullptr;
     gCanonicalIDCacheInitOnce.reset();
 
     if (gOlsonToMeta != nullptr) {
@@ -221,6 +230,23 @@ static void U_CALLCONV initCanonicalIDCache(UErrorCode &status) {
         gCanonicalIDCache = nullptr;
     }
     // No key/value deleters - keys/values are from a resource bundle
+
+    UErrorCode tmpStatus = U_ZERO_ERROR;
+    LocalUResourceBundlePointer top(ures_openDirect(nullptr, gKeyTypeData, &tmpStatus));
+    auto open = [&](const char *tag) -> UResourceBundle * {
+        UErrorCode openStatus = tmpStatus;
+        UResourceBundle *rb = ures_getByKey(top.getAlias(), tag, nullptr, &openStatus);
+        ures_getByKey(rb, gTimezoneTag, rb, &openStatus);
+        if (U_FAILURE(openStatus)) {
+            ures_close(rb);
+            rb = nullptr;
+        }
+        return rb;
+    };
+    gTypeMap = open(gTypeMapTag);
+    gTypeAlias = open(gTypeAliasTag);
+    gIanaMap = open(gIanaMapTag);
+
     ucln_i18n_registerCleanup(UCLN_I18N_ZONEMETA, zoneMeta_cleanup);
 }
 
@@ -268,6 +294,8 @@ ZoneMeta::getCanonicalCLDRID(const UnicodeString &tzid, UErrorCode& status) {
 
     // If not, resolve CLDR canonical ID with resource data
     UBool isInputCanonical = false;
+    // tzid as the tz data have it, once that is known.
+    const char16_t *key = nullptr;
     char id[ZID_KEY_MAX + 1];
     tzid.extract(0, 0x7fffffff, id, UPRV_LENGTHOF(id), US_INV);
 
@@ -279,23 +307,21 @@ ZoneMeta::getCanonicalCLDRID(const UnicodeString &tzid, UErrorCode& status) {
         }
     }
 
-    UResourceBundle *top = ures_openDirect(nullptr, gKeyTypeData, &tmpStatus);
-    UResourceBundle *rb = ures_getByKey(top, gTypeMapTag, nullptr, &tmpStatus);
-    ures_getByKey(rb, gTimezoneTag, rb, &tmpStatus);
-    ures_getByKey(rb, id, rb, &tmpStatus);
+    {
+        StackUResourceBundle type;
+        ures_getByKey(gTypeMap, id, type.getAlias(), &tmpStatus);
+    }
     if (U_SUCCESS(tmpStatus)) {
         // type entry (canonical) found
         // the input is the canonical ID. resolve to const char16_t*
-        canonicalID = TimeZone::findID(tzid);
+        canonicalID = key = TimeZone::findID(tzid);
         isInputCanonical = true;
     }
 
     if (canonicalID == nullptr) {
         // If a map element not found, then look for an alias
         tmpStatus = U_ZERO_ERROR;
-        ures_getByKey(top, gTypeAliasTag, rb, &tmpStatus);
-        ures_getByKey(rb, gTimezoneTag, rb, &tmpStatus);
-        const char16_t *canonical = ures_getStringByKey(rb,id,nullptr,&tmpStatus);
+        const char16_t *canonical = ures_getStringByKey(gTypeAlias,id,nullptr,&tmpStatus);
         if (U_SUCCESS(tmpStatus)) {
             // canonical map found
             canonicalID = canonical;
@@ -320,10 +346,8 @@ ZoneMeta::getCanonicalCLDRID(const UnicodeString &tzid, UErrorCode& status) {
                 }
 
                 // If a dereference turned something up then look for an alias.
-                // rb still points to the alias table, so we don't have to go looking
-                // for it.
                 tmpStatus = U_ZERO_ERROR;
-                canonical = ures_getStringByKey(rb,id,nullptr,&tmpStatus);
+                canonical = ures_getStringByKey(gTypeAlias,id,nullptr,&tmpStatus);
                 if (U_SUCCESS(tmpStatus)) {
                     // canonical map for the dereferenced ID found
                     canonicalID = canonical;
@@ -334,8 +358,6 @@ ZoneMeta::getCanonicalCLDRID(const UnicodeString &tzid, UErrorCode& status) {
             }
         }
     }
-    ures_close(rb);
-    ures_close(top);
 
     if (U_SUCCESS(status)) {
         U_ASSERT(canonicalID != nullptr);  // canocanilD must be non-nullptr here
@@ -345,7 +367,9 @@ ZoneMeta::getCanonicalCLDRID(const UnicodeString &tzid, UErrorCode& status) {
         {
             const char16_t* idInCache = static_cast<const char16_t*>(uhash_get(gCanonicalIDCache, utzid));
             if (idInCache == nullptr) {
-                const char16_t* key = ZoneMeta::findTimeZoneID(tzid);
+                if (key == nullptr) {
+                    key = ZoneMeta::findTimeZoneID(tzid);
+                }
                 U_ASSERT(key != nullptr);
                 if (key != nullptr) {
                     idInCache = static_cast<const char16_t*>(uhash_put(gCanonicalIDCache, const_cast<char16_t*>(key), const_cast<char16_t*>(canonicalID), &status));
@@ -405,12 +429,9 @@ ZoneMeta::getIanaID(const UnicodeString& tzid, UnicodeString& ianaID, UErrorCode
     char keyBuf[ZID_KEY_MAX + 1];
     /* int32_t keyLen = */ tmpKey.extract(0, tmpKey.length(), keyBuf, sizeof(keyBuf), US_INV);
 
-    StackUResourceBundle r;
-    ures_openDirectFillIn(r.getAlias(), nullptr, gKeyTypeData, &tmpStatus);
-    ures_getByKey(r.getAlias(), gIanaMapTag, r.getAlias(), &tmpStatus);
-    ures_getByKey(r.getAlias(), gTimezoneTag, r.getAlias(), &tmpStatus);
+    // getCanonicalCLDRID() has opened it.
     int32_t tmpLen = 0;
-    const char16_t* tmpIana = ures_getStringByKey(r.getAlias(), keyBuf, &tmpLen, &tmpStatus);
+    const char16_t* tmpIana = ures_getStringByKey(gIanaMap, keyBuf, &tmpLen, &tmpStatus);
     if (U_SUCCESS(tmpStatus)) {
         ianaID.setTo(true, tmpIana, -1);
     } else {
