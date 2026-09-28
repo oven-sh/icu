@@ -210,6 +210,11 @@ CollationIterator::handleNextCE32(UChar32 &c, UErrorCode &errorCode) {
 
 uint32_t
 CollationIterator::getCE32FromMappedRangeOfBMP(UChar32 c) {
+    if(c < CollationData::LATIN1_LIMIT) {
+        uint32_t ce32 = data->latin1CE32s[c];
+        isFromMappings = (ce32 & 0xff) > Collation::LONG_PRIMARY_CE32_LOW_BYTE && data->isMappedLatin1(c);
+        return ce32;
+    }
     uint32_t place = data->mappings.bmpBlocks[c >> 6];
     uint32_t ce32 = place == 0 ? Collation::FALLBACK_CE32 : data->mappings.getFromBMPInline(c, place);
     if(ce32 == Collation::FALLBACK_CE32) {
@@ -731,10 +736,7 @@ CollationIterator::appendNumericCEs(uint32_t ce32, UBool forward, UErrorCode &er
             if(numCpFwd == 0) { break; }
             UChar32 c = nextCodePoint(errorCode);
             if(c < 0) { break; }
-            ce32 = data->getCE32(c);
-            if(ce32 == Collation::FALLBACK_CE32) {
-                ce32 = data->base->getCE32(c);
-            }
+            ce32 = data->getCE32OrTheRoots(c);
             if(!Collation::hasCE32Tag(ce32, Collation::DIGIT_TAG)) {
                 backwardNumCodePoints(1, errorCode);
                 break;
@@ -747,10 +749,7 @@ CollationIterator::appendNumericCEs(uint32_t ce32, UBool forward, UErrorCode &er
             digits.append(digit, errorCode);
             UChar32 c = previousCodePoint(errorCode);
             if(c < 0) { break; }
-            ce32 = data->getCE32(c);
-            if(ce32 == Collation::FALLBACK_CE32) {
-                ce32 = data->base->getCE32(c);
-            }
+            ce32 = data->getCE32OrTheRoots(c);
             if(!Collation::hasCE32Tag(ce32, Collation::DIGIT_TAG)) {
                 forwardNumCodePoints(1, errorCode);
                 break;

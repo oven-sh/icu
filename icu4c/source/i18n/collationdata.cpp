@@ -39,6 +39,10 @@ CollationMappings::getFromMappedRange(UChar32 c) const {
 
 uint32_t
 CollationMappings::get(UChar32 c) const {
+    if(static_cast<uint32_t>(c) <= 0xffff) {
+        uint32_t place = bmpBlocks[c >> 6];
+        return place == 0 ? Collation::FALLBACK_CE32 : getFromBMPInline(c, place);
+    }
     return isInMappedRange(c) ? getFromMappedRange(c) : Collation::FALLBACK_CE32;
 }
 

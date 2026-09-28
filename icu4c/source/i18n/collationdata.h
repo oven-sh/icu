@@ -85,6 +85,27 @@ struct U_I18N_API CollationData : public UMemory {
         root = base != nullptr ? base : this;
         rootIndex = root->trie->index;
         rootValues = root->trie->data32;
+        for(UChar32 c = 0; c < LATIN1_LIMIT; ++c) {
+            uint32_t ce32 = mappings.get(c);
+            if(ce32 != Collation::FALLBACK_CE32) {
+                latin1CE32s[c] = ce32;
+                latin1IsMapped[c >> 6] |= uint64_t{1} << (c & 0x3f);
+            } else {
+                latin1CE32s[c] = getCE32FromRootBMP(c);
+            }
+        }
+    }
+
+    /** The CE32 of these data if they map c, else the root's. */
+    uint32_t getCE32OrTheRoots(UChar32 c) const {
+        if(static_cast<uint32_t>(c) < static_cast<uint32_t>(LATIN1_LIMIT)) { return latin1CE32s[c]; }
+        uint32_t ce32 = getCE32(c);
+        return ce32 == Collation::FALLBACK_CE32 ? base->getCE32(c) : ce32;
+    }
+
+    /** @param c a code point below LATIN1_LIMIT */
+    UBool isMappedLatin1(UChar32 c) const {
+        return (latin1IsMapped[c >> 6] >> (c & 0x3f)) & 1;
     }
 
     UBool isDigit(UChar32 c) const {
@@ -196,6 +217,13 @@ struct U_I18N_API CollationData : public UMemory {
     const CollationData *root;
     const uint16_t *rootIndex;
     const uint32_t *rootValues;
+    static constexpr UChar32 LATIN1_LIMIT = 0x100;
+    /**
+     * Not in the data: for each code point below the limit, the CE32 of these data if they map it, else the root's.
+     * ICU's tailorings have copies of the root's mappings for most of these, for speed.
+     */
+    uint32_t latin1CE32s[LATIN1_LIMIT];
+    uint64_t latin1IsMapped[LATIN1_LIMIT >> 6] = {};
     /**
      * Array of CE32 values.
      * In the root data, at index 0 there must be CE32(U+0000)
