@@ -115,6 +115,8 @@ private:
     int32_t defaultLsrIndex;
     uint64_t trieFirstLetterStates[26];
     const LSR *lsrs;
+    /** What the languages and regions of lsrs, and of the distance data's paradigms, point into. */
+    char *lsrSubtags;
 #if U_DEBUG
     int32_t lsrsLength;
 #endif
