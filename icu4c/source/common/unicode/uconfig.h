@@ -474,4 +474,27 @@
 #   define UCONFIG_NO_FILTERED_BREAK_ITERATION 0
 #endif
 
+/**
+ * \def UCONFIG_NO_PARSING
+ * oven-sh/icu: This switch turns off parsing numbers, dates, time zones and messages.
+ * The functions remain, being virtual, and find nothing that they can parse.
+ * Nothing else calls the code behind them, but a linker cannot tell that of a virtual function.
+ *
+ * @internal
+ */
+#ifndef UCONFIG_NO_PARSING
+#   define UCONFIG_NO_PARSING 0
+#endif
+
+/**
+ * \def UCONFIG_NO_UNIT_CONVERSION
+ * oven-sh/icu: This switch turns off formatting a number in another unit than it is given in:
+ * the "usage" of a number formatter, and mixed units such as foot-and-inch. Both are then unsupported.
+ *
+ * @internal
+ */
+#ifndef UCONFIG_NO_UNIT_CONVERSION
+#   define UCONFIG_NO_UNIT_CONVERSION 0
+#endif
+
 #endif  // __UCONFIG_H__

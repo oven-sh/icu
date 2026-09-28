@@ -719,6 +719,11 @@ DecimalFormat::format(const DecimalQuantity& number, UnicodeString& appendTo, Fi
 
 void DecimalFormat::parse(const UnicodeString& text, Formattable& output,
                           ParsePosition& parsePosition) const {
+#if UCONFIG_NO_PARSING
+    (void)text;
+    (void)output;
+    parsePosition.setErrorIndex(parsePosition.getIndex());
+#else
     if (fields == nullptr) {
         return;
     }
@@ -750,9 +755,15 @@ void DecimalFormat::parse(const UnicodeString& text, Formattable& output,
     } else {
         parsePosition.setErrorIndex(startIndex + result.charEnd);
     }
+#endif
 }
 
 CurrencyAmount* DecimalFormat::parseCurrency(const UnicodeString& text, ParsePosition& parsePosition) const {
+#if UCONFIG_NO_PARSING
+    (void)text;
+    parsePosition.setErrorIndex(parsePosition.getIndex());
+    return nullptr;
+#else
     if (fields == nullptr) {
         return nullptr;
     }
@@ -788,6 +799,7 @@ CurrencyAmount* DecimalFormat::parseCurrency(const UnicodeString& text, ParsePos
         parsePosition.setErrorIndex(startIndex + result.charEnd);
         return nullptr;
     }
+#endif
 }
 
 const DecimalFormatSymbols* DecimalFormat::getDecimalFormatSymbols() const {

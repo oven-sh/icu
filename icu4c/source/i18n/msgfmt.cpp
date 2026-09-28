@@ -1376,6 +1376,14 @@ MessageFormat::parse(int32_t msgStart,
                      ParsePosition& pos,
                      int32_t& count,
                      UErrorCode& ec) const {
+#if UCONFIG_NO_PARSING
+    (void)msgStart;
+    (void)source;
+    (void)ec;
+    count = 0;
+    pos.setErrorIndex(pos.getIndex());
+    return nullptr;
+#else
     count = 0;
     if (U_FAILURE(ec)) {
         pos.setErrorIndex(pos.getIndex());
@@ -1496,6 +1504,7 @@ MessageFormat::parse(int32_t msgStart,
         prevIndex=msgPattern.getPart(argLimit).getLimit();
         i=argLimit;
     }
+#endif
 }
 // -------------------------------------
 // Parses the source pattern and returns the Formattable objects array,

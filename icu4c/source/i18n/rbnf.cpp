@@ -1345,6 +1345,11 @@ RuleBasedNumberFormat::parse(const UnicodeString& text,
                              Formattable& result,
                              ParsePosition& parsePosition) const
 {
+#if UCONFIG_NO_PARSING
+    (void)text;
+    (void)result;
+    parsePosition.setErrorIndex(parsePosition.getIndex());
+#else
     if (!fRuleSets) {
         parsePosition.setErrorIndex(0);
         return;
@@ -1392,6 +1397,7 @@ RuleBasedNumberFormat::parse(const UnicodeString& text,
             result.setLong(static_cast<int32_t>(d));
         }
     }
+#endif
 }
 
 #if !UCONFIG_NO_COLLATION
@@ -1806,7 +1812,8 @@ RuleBasedNumberFormat::dispose()
 const RuleBasedCollator*
 RuleBasedNumberFormat::getCollator() const
 {
-#if !UCONFIG_NO_COLLATION
+// It is for lenient parsing, and made from rules, which takes all that builds collation data.
+#if !UCONFIG_NO_COLLATION && !UCONFIG_NO_PARSING
     if (!fRuleSets) {
         return nullptr;
     }
