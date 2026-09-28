@@ -8,6 +8,7 @@
 #include "unicode/numberformatter.h"
 #include "unicode/simplenumberformatter.h"
 #include "number_formatimpl.h"
+#include "number_localedata.h"
 #include "number_utils.h"
 #include "number_patternmodifier.h"
 #include "number_utypes.h"
@@ -178,11 +179,23 @@ void SimpleNumberFormatter::initialize(
     }
     fMicros->symbols = &symbols;
 
-    const auto* pattern = utils::getPatternForStyle(
-        locale,
-        symbols.getNumberingSystemName(),
-        CLDR_PATTERN_STYLE_DECIMAL,
-        status);
+    // nullptr if there is none, which is no reason to fail: the symbols are given.
+    struct LocaleData {
+        const SharedNumberLocaleData *ptr = nullptr;
+        ~LocaleData() { SharedObject::clearPtr(ptr); }
+    } localeData;
+    UErrorCode localeDataStatus = U_ZERO_ERROR;
+    UnifiedCache::getByLocale(locale, localeData.ptr, localeDataStatus);
+
+    // Its patterns are for the numbering system that the locale says.
+    const auto* pattern =
+            localeData.ptr != nullptr && uprv_strcmp(symbols.getNumberingSystemName(), localeData.ptr->nsName) == 0 ?
+        localeData.ptr->getPattern(CLDR_PATTERN_STYLE_DECIMAL, status) :
+        utils::getPatternForStyle(
+            locale,
+            symbols.getNumberingSystemName(),
+            CLDR_PATTERN_STYLE_DECIMAL,
+            status);
     if (U_FAILURE(status)) {
         return;
     }
@@ -194,7 +207,7 @@ void SimpleNumberFormatter::initialize(
     }
 
     auto grouper = Grouper::forStrategy(groupingStrategy);
-    grouper.setLocaleData(patternInfo, locale);
+    grouper.setLocaleData(patternInfo, locale, localeData.ptr != nullptr ? &localeData.ptr->minGrouping : nullptr);
     fMicros->grouping = grouper;
 
     MutablePatternModifier patternModifier(false);
