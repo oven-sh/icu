@@ -37,7 +37,8 @@ import { canCompact, compactTree } from "./icu-res.ts";
  *
  *   unnamed   No ICU4C source names the key, whole or in part, and no code enumerates the table it is in. CLDR data
  *             that other consumers (ICU4J, CLDR's own tools) read. checkUnnamed() looks the keys up in the sources.
- *   unlinked  The only functions that name it are not in Bun: nothing calls them, so the linker dropped them.
+ *   unlinked  Nothing in Bun calls the only functions that ask for it. Most of those the linker dropped;
+ *             some are there because others in their file are, or ask for it only for an argument nobody passes.
  *   refused   ECMA-402 rejects, before ICU sees it, every input that would select it.
  *
  * ../oracle compares what every one of those APIs returns, for every locale, between two builds.
@@ -420,7 +421,7 @@ async function buildTree(tree: Tree, after: Promise<unknown>): Promise<void> {
   writeFileSync(join(tmp, "res_index.txt"), resIndex(tree, locales));
 
   const extra = tree.filter === undefined ? [] : filterDir(tree.dir, built, tree.filter());
-  // unlinked: what builds a collator from rules. JavaScriptCore asks only whether there are any, and the fork's genrb
+  // unlinked: what builds a collator from rules. JavaScriptCore asks only whether there are any, and this genrb
   // leaves a space of them.
   if (tree.dir === "coll") extra.push("--omitCollationRules");
 
@@ -736,7 +737,7 @@ const packaged = writePackage();
 const unchanged = existsSync(args.out!) && readFileSync(args.out!).equals(packaged);
 if (!unchanged) writeFileSync(args.out!, packaged);
 
-// Spaces cannot occur in these names; backslashes are Windows path separators, which ninja accepts as /.
+// Backslashes are Windows path separators, which make and ninja accept as /.
 const escape = (path: string) => path.replaceAll("\\", "/").replaceAll(" ", "\\ ");
 if (args.depfile) writeFileSync(args.depfile, `${escape(args.out!)}: ${[...inputs].map(escape).join(" ")}\n`);
 console.log(`${basename(args.out!)}: ${packaged.length} bytes${unchanged ? " (unchanged)" : ""}`);

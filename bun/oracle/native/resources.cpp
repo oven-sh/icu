@@ -253,13 +253,14 @@ static void walkPublic(UResourceBundle* bundle, const std::string& path, std::st
 int main(int argc, char** argv) {
   bool isPublic = argc > 1 && strcmp(argv[1], "--public") == 0;
   std::string tree, name;
-  long bundles = 0;
+  long bundles = 0, missing = 0;
   while (std::cin >> tree >> name) {
     UErrorCode status = U_ZERO_ERROR;
     std::string package = "icudt" U_ICU_VERSION_SHORT "l-" + tree;
     LocalUResourceBundlePointer bundle(ures_openDirect(tree == "-" ? nullptr : package.c_str(), name.c_str(), &status));
     if (U_FAILURE(status)) {
       printf("%s/%s !%s\n", tree.c_str(), name.c_str(), u_errorName(status));
+      missing++;
       continue;
     }
     std::string out;
@@ -276,5 +277,7 @@ int main(int argc, char** argv) {
     if (const char* dump = getenv("DUMP"); dump && name == dump) fputs(out.c_str(), stderr);
     bundles++;
   }
-  fprintf(stderr, "%ld bundles, %ld checks\n", bundles, checks);
+  fprintf(stderr, "%ld bundles, %ld checks, %ld bundles that could not be opened\n", bundles, checks, missing);
+  // Two packages that are not there have the same to say.
+  return bundles == 0 || missing != 0 ? 1 : 0;
 }

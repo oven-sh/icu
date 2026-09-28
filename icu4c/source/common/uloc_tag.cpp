@@ -1069,7 +1069,7 @@ _appendLanguageToLanguageTag(const icu::CharString& buf, UErrorCode tmpStatus, i
     } else {
         /* resolve deprecated */
         // Each of DEPRECATEDLANGS[] is four bytes, the code and NULs. Compared as such, not as a string:
-        // there are many, and most languages are compared with all of them.
+        // there are many, and a language that is not among them is compared with all of them.
         char code[sizeof(DEPRECATEDLANGS[0])] = {};
         if (buf.length() < static_cast<int32_t>(sizeof(code))) {
             uprv_memcpy(code, buf.data(), buf.length());

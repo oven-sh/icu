@@ -3,9 +3,10 @@
 Answers one question: do two builds of Bun behave the same wherever ICU is involved?
 
 It exists for changes to ICU itself or to what `../data/icu-data.ts` leaves out of its data, where the expected
-result is that nothing observable changes. It calls every ICU-backed API (`Intl.*`, `Temporal`, `Date`, `String`
+result is that nothing observable changes. It calls the ICU-backed APIs (`Intl.*`, `Temporal`, `Date`, `String`
 normalization and casing, the lexer's identifier rules, IDNA, `Bun.stringWidth`, `URLPattern`) with every locale the
-data has and every option that selects different data, and hashes what comes back per section and subject.
+data has and the options that are known to select different data, and hashes what comes back per section and subject.
+It is as good as what it asks: when a change is about something in particular, see whether that is asked.
 
 ```sh
 bun prepare.ts ../.. /tmp/in                          # inputs, derived from ICU's sources
@@ -20,7 +21,10 @@ bun run.ts --compare /tmp/before.txt /tmp/after.txt   # exits 1 and names the ke
 so a test that fails under both builds is not a difference.
 
 `bench.ts` compares builds on what the representation of the data can change: the first use of an API in a new
-process, the same once warm, and the memory left behind. `bench-collation.js` times comparisons of text in a dozen
+process, the same once warm, and the memory left behind. `bench-warm.js` times some ninety things once all has been
+used before. Times of what allocates differ by 10% and more between two runs of one build, so it also runs one thing
+a given number of times, for `perf stat` to count instructions or cycles: with two numbers of times, the difference
+is what the calls took. One build against itself then stays within 2%. `bench-collation.js` times comparisons of text in a dozen
 scripts (`<bun> bench-collation.js en,de,zh,ja,ko,th`, pinned to a core, builds taking turns, fastest of three).
 
 `surrogates.js` compares every supplementary code point and every unpaired surrogate with pivots under 35 collators

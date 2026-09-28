@@ -9,6 +9,7 @@
 //
 //   threads <number of threads> < bundles.txt      with ICU_DATA=<directory of icudt<version>l.dat>
 
+#include <atomic>
 #include <barrier>
 #include <cstdio>
 #include <cstdlib>
@@ -92,6 +93,7 @@ int main(int, char** argv) {
   for (std::string tree, name; std::cin >> tree >> name;) bundles.push_back({tree, name});
 
   std::vector<Hash> hashes(count, 1469598103934665603ULL);
+  std::atomic<long> missing{0};
   std::barrier together(count);
   std::vector<std::thread> threads;
   for (int t = 0; t < count; t++) {
@@ -102,6 +104,7 @@ int main(int, char** argv) {
         std::string package = "icudt" U_ICU_VERSION_SHORT "l-" + tree;
         UResourceBundle* bundle = ures_open(tree == "-" ? nullptr : package.c_str(), name.c_str(), &status);
         if (U_SUCCESS(status)) walk(bundle, hashes[t], 0);
+        else missing++;
         ures_close(bundle);
         if (tree == "-") format(name.c_str(), hashes[t]);
       }
@@ -112,5 +115,7 @@ int main(int, char** argv) {
   bool agree = true;
   for (Hash hash : hashes) agree = agree && hash == hashes[0];
   printf("%d threads, %zu bundles: %s %016llx\n", count, bundles.size(), agree ? "all agree" : "THREADS DISAGREE", hashes[0]);
-  return agree ? 0 : 1;
+  // Threads that read nothing agree.
+  if (bundles.empty() || missing != 0) printf("%ld times a bundle could not be opened\n", missing.load());
+  return agree && !bundles.empty() && missing == 0 ? 0 : 1;
 }

@@ -35,13 +35,7 @@ const walk = (dir: string): string[] =>
         ? [join(dir, e.name)]
         : [],
   );
-const tests = DIRS.flatMap(d => {
-  try {
-    return walk(join(root, d));
-  } catch {
-    return [];
-  }
-}).sort();
+const tests = DIRS.flatMap(d => walk(join(root, d))).sort();
 
 const harness = (name: string) => readFileSync(join(root, "harness", name), "utf8");
 const work = mkdtempSync(join(tmpdir(), "test262-"));

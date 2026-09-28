@@ -213,7 +213,7 @@ function readBundle3(name: string, bytes: Buffer, pool: Pool3): Bundle {
           items: times(bytes.readUInt16LE(at16), i => string16(bytes.readUInt16LE(at16 + 2 + i * 2))),
         };
     }
-    // Binaries do not occur in the trees that have a pool.
+    // canCompact() keeps bundles that have binaries away.
     throw new Error(`${name}: resource type ${type}`);
   };
   return { name, noFallback: (attributes & ATT_NO_FALLBACK) !== 0, root: walk(bytes.readUInt32LE(root)) };
@@ -249,10 +249,9 @@ interface Grammar {
 /**
  * Phrases that occur over and over in `strings`, by Re-Pair (Larsson and Moffat): the pair of symbols that is
  * most frequent becomes a symbol, until none occurs twice. In time linear in the text.
- * @param isLetter units that are not letters are in no phrase
  * @returns each phrase and how often it, as a symbol, is left in the text or in another phrase
  */
-function findPhrases(strings: string[], isLetter: (unit: number) => boolean): Map<string, number> {
+function findPhrases(strings: string[]): Map<string, number> {
   let n = 0;
   for (const s of strings) n += s.length + 1;
   // Symbols: 0 where no pair can be, a unit plus 1, or FIRST_RULE plus the number of a rule.
@@ -260,7 +259,7 @@ function findPhrases(strings: string[], isLetter: (unit: number) => boolean): Ma
   const symbol = new Int32Array(n);
   let at = 0;
   for (const s of strings) {
-    for (let i = 0; i < s.length; i++) symbol[at++] = isLetter(s.charCodeAt(i)) ? s.charCodeAt(i) + 1 : 0;
+    for (let i = 0; i < s.length; i++) symbol[at++] = s.charCodeAt(i) + 1;
     at++;
   }
   // The symbols that are left are a linked list, and so are the places where a pair occurs, by that of its first symbol.
@@ -339,7 +338,6 @@ function findPhrases(strings: string[], isLetter: (unit: number) => boolean): Ma
       if (before >= 0) list(before);
       if (after < n) list(i);
     }
-    count = byCount.length - 1;
   }
 
   const phrases: string[] = [];
@@ -449,7 +447,7 @@ function singlesOf(n: number): number {
 function makeGrammar(strings: string[]): Grammar {
   let letters = new Map<number, number>();
   for (const s of strings) for (let i = 0; i < s.length; i++) letters.set(s.charCodeAt(i), (letters.get(s.charCodeAt(i)) ?? 0) + 1);
-  let rules = [...findPhrases(strings, () => true)].filter(([, uses]) => uses > 1);
+  let rules = [...findPhrases(strings)].filter(([, uses]) => uses > 1);
   for (let round = 0; ; round++) {
     // A unit that occurs once takes no more cells escaped than as a letter that has to be stored too.
     const byUse = [
@@ -605,20 +603,6 @@ const byBytes = (a: string, b: string) => Buffer.compare(Buffer.from(a, "latin1"
 function* stringsOf(node: Node): Generator<StringNode> {
   if (node.is === "string") yield node;
   else if (node.is === "table" || node.is === "array") for (const item of node.items) yield* stringsOf(item);
-}
-
-/** The units that are not ASCII, most frequent first, and how many units there are. */
-function census(strings: Iterable<string>): { frequent: [unit: number, count: number][]; units: number } {
-  const counts = new Map<number, number>();
-  let units = 0;
-  for (const s of strings) {
-    units += s.length;
-    for (let i = 0; i < s.length; i++) {
-      const unit = s.charCodeAt(i);
-      if (unit >= 0x80) counts.set(unit, (counts.get(unit) ?? 0) + 1);
-    }
-  }
-  return { frequent: [...counts].sort((a, b) => b[1] - a[1] || a[0] - b[0]), units };
 }
 
 function share(bundles: Bundle[], pool: Pool3): Shared {

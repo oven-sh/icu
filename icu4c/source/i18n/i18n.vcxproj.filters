@@ -944,6 +944,9 @@
     <ClInclude Include="number_longnames.h">
       <Filter>formatting</Filter>
     </ClInclude>
+    <ClInclude Include="number_localedata.h">
+      <Filter>formatting</Filter>
+    </ClInclude>
     <ClInclude Include="number_microprops.h">
       <Filter>formatting</Filter>
     </ClInclude>
@@ -1284,6 +1287,9 @@
       <Filter>collation</Filter>
     </ClInclude>
     <ClInclude Include="collationkeys.h">
+      <Filter>collation</Filter>
+    </ClInclude>
+    <ClInclude Include="collationmappings.h">
       <Filter>collation</Filter>
     </ClInclude>
     <ClInclude Include="collationroot.h">

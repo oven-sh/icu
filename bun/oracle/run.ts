@@ -20,6 +20,7 @@ if (process.argv[2] === "--compare") {
     );
   const a = load(process.argv[3]!);
   const b = load(process.argv[4]!);
+  if (!a.size || !b.size) throw new Error("nothing to compare");
   const differing: string[] = [];
   for (const [key, line] of a) if (b.get(key) !== line) differing.push(key);
   for (const key of b.keys()) if (!a.has(key)) differing.push(key);
@@ -45,7 +46,7 @@ const env: Record<string, string | undefined> = {
   LANG: "en_US.UTF-8",
   LC_ALL: "en_US.UTF-8",
 };
-for (const name of ["ICU_DATA", "BUN_ICU_TRACE"]) if (process.env[name]) env[name] = process.env[name];
+if (process.env.ICU_DATA) env.ICU_DATA = process.env.ICU_DATA;
 
 const capture = (args: string[]) =>
   new Promise<string>((resolve, reject) => {

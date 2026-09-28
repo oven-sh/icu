@@ -21,14 +21,14 @@ const stems = (dir: string) =>
 
 // ─── ICU resource bundle text ───
 
-export type Res = string | Res[] | { [key: string]: Res };
+type Res = string | Res[] | { [key: string]: Res };
 
 /** Enough of genrb's grammar to read the shipped bundles: tables, arrays, strings; other types come out as strings. */
-export function parseBundle(text: string): { [key: string]: Res } {
+function parseBundle(text: string): { [key: string]: Res } {
   let i = 0;
   const skip = () => {
     for (;;) {
-      while (i < text.length && /[\s﻿]/.test(text[i]!)) i++;
+      while (i < text.length && /[\s\ufeff]/.test(text[i]!)) i++;
       if (text.startsWith("//", i)) i = text.indexOf("\n", i) >>> 0;
       else if (text.startsWith("/*", i)) i = text.indexOf("*/", i) + 2;
       else return;
@@ -140,7 +140,7 @@ const toBcp47 = (id: string): string | undefined => {
 const locales = (dir: string) => [...new Set(stems(dir).flatMap(id => toBcp47(id) ?? []))];
 const all = new Set<string>();
 for (const dir of ["locales", "curr", "lang", "region", "unit", "zone", "coll", "brkitr", "rbnf"]) {
-  for (const l of locales(dir === "curr" || dir === "zone" ? dir : dir)) {
+  for (const l of locales(dir)) {
     if (!/^(supplementalData|tzdbNames)$/.test(l)) all.add(l);
   }
 }
@@ -222,11 +222,9 @@ save("zonePeriods", periods);
 
 // ─── Units: every identifier the data has a name for ───
 
-const unitsEn = bundle("unit/root.txt").units as Record<string, Res>;
+const unitsEn = bundle("unit/en.txt").units as Record<string, Res>;
 const unitIds = new Set<string>();
-for (const source of [unitsEn, bundle("unit/en.txt").units as Record<string, Res>]) {
-  for (const category of keys(source)) for (const unit of keys(source[category])) unitIds.add(unit);
-}
+for (const category of keys(unitsEn)) for (const unit of keys(unitsEn[category])) unitIds.add(unit);
 save("unitIds", [...unitIds].sort());
 
 // ─── Collation: every string a tailoring mentions ───
@@ -264,7 +262,7 @@ const fromHex = (hex: string) =>
 
 for (const dict of stems("brkitr/dictionaries")) {
   const words = lines(`data/brkitr/dictionaries/${dict}.txt`)
-    .map(l => l.replace(/^﻿/, "").replace(/#.*/, "").split("\t")[0]!.trim())
+    .map(l => l.replace(/^\ufeff/, "").replace(/#.*/, "").split("\t")[0]!.trim())
     .filter(Boolean);
   save("dict-" + dict, words);
 }

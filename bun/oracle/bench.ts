@@ -94,7 +94,7 @@ const cell = (n: number, digits = 0) => n.toFixed(digits).padStart(9);
 console.log(`median of ${runs} processes each\n`);
 const header = (unit: string) => "".padEnd(30) + builds.map(([n]) => `${n} ${unit}`.padStart(16)).join("");
 
-// ─── First use, per API, averaged over the locales whose data the shipped build compresses ───
+// ─── First use, per API, for English and averaged over other locales ───
 for (const group of wanted("first") ? [["en-US"], LOCALES.slice(1)] : []) {
   console.log(`first call in a new process, ${group.length === 1 ? group[0] : `mean over ${group.join(" ")}`}`);
   console.log(header("µs"));

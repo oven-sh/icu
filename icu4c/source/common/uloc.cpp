@@ -1185,7 +1185,13 @@ struct CodeIndex {
         while (n < 2 * N) { n *= 2; }
         return n;
     }
-    static constexpr size_t slot(uint32_t packed) { return (packed * 0x9e3779b1u) & (capacity() - 1); }
+    // The high bits of the product, which all of the code has gone into.
+    static constexpr size_t slot(uint32_t packed) {
+        uint32_t hash = packed * 0x9e3779b1u;
+        size_t n = capacity();
+        for (; n < (size_t{1} << 32); n *= 2) { hash >>= 1; }
+        return hash;
+    }
 
     uint32_t codes[capacity()] = {};
     int16_t indexes[capacity()] = {};
