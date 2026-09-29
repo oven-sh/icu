@@ -53,6 +53,10 @@ struct ResourceCompactContainer {
     const uint8_t *items;
     /** Where the item numbered index is. */
     const uint8_t *place;
+    /** The offsets of every 8th of the items that are stored one after the other, or nullptr if that is yet to be found. */
+    const uint8_t *sequence;
+    /** How many those items are. */
+    int32_t sequenceLength;
     int32_t length;
     int32_t mode;
     /** The item that was read last of those that are stored one after the other, or -1. */

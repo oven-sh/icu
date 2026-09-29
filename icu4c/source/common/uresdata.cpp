@@ -96,6 +96,8 @@ using icu::ResourceCompactContainer;
 
 /** Every 8th item of a sequence has its offset stored. */
 constexpr int32_t SKIP_SHIFT = 3;
+/** A table with at most this many keys is searched by going through them, rather than by halving its keyset. */
+constexpr int32_t MAX_KEYS_TO_GO_THROUGH = 8;
 constexpr uint8_t UNIT_ESCAPE = 0xff;
 constexpr uint32_t HEADER_ESCAPE = 0xff;
 constexpr uint32_t HEADER_HAS_KEY_BITS = 4;
@@ -256,44 +258,32 @@ public:
         const uint8_t *items = p;
         uint32_t header = readHeader(URES_TABLE_COMPACT, items);
         const uint16_t *keyset = keysetOf(header);
-        int32_t i = find(keyset, *key, key);
-        if (i >= 0) {
-            int32_t j = i;
-            ResourceCompactContainer c;
-            c.keyBits = nullptr;
-            if ((header & HEADER_HAS_KEY_BITS) != 0) {
-                CompactBits has(items);
-                i = has.test(j) ? has.rank(j) : -1;
-                c.keyBits = items;
-                items += ((keyset[0] + 15) >> 4) << 1;
-            }
-            *indexR = i;
-            if (i >= 0) {
-                if ((header & 3) == COMPACT_VALUES) { return value(itemType(keyset, j), load16(items + (i << 1))); }
-                c.mode = header & 3;
-                c.keyset = keyset;
-                c.length = c.keyBits == nullptr ? keyset[0] : CompactBits(c.keyBits).count((keyset[0] + 15) >> 4);
-                c.items = items;
-                c.index = c.keyOf = c.key = -1;
-                return item(c, i, j);
-            }
-        } else {
-            *indexR = -1;
+        ResourceCompactContainer c;
+        c.keyset = keyset;
+        c.keyBits = nullptr;
+        c.length = keyset[0];
+        if ((header & HEADER_HAS_KEY_BITS) != 0) {
+            int32_t fields = (c.length + 15) >> 4;
+            c.keyBits = items;
+            c.length = CompactBits(items).count(fields);
+            items += fields << 1;
         }
-        return RES_BOGUS;
+        int32_t j;
+        int32_t i = *indexR = find(c, *key, key, j);
+        if (i < 0) { return RES_BOGUS; }
+        if ((header & 3) == COMPACT_VALUES) { return value(itemType(keyset, j), load16(items + (i << 1))); }
+        c.mode = header & 3;
+        c.items = items;
+        c.sequence = nullptr;
+        c.index = c.keyOf = c.key = -1;
+        return item(c, i, j);
     }
 
     /** Like itemByKey() for a table that is open. */
     U_FORCE_INLINE Resource itemByKey(ResourceCompactContainer &c, const char *key) const {
-        int32_t j = find(c.keyset, key, &key);
-        if (j < 0) { return RES_BOGUS; }
-        int32_t i = j;
-        if (c.keyBits != nullptr) {
-            CompactBits has(c.keyBits);
-            if (!has.test(j)) { return RES_BOGUS; }
-            i = has.rank(j);
-        }
-        return item(c, i, j);
+        int32_t j;
+        int32_t i = find(c, key, &key, j);
+        return i < 0 ? RES_BOGUS : item(c, i, j);
     }
 
     /** @param j keyIndex(c, i); not used for an array */
@@ -355,9 +345,36 @@ private:
             }
         }
         c.items = p;
+        c.sequence = nullptr;
         c.index = -1;
         // keyIndex(c, 0) is the first bit that is set after this one.
         c.keyOf = c.key = -1;
+    }
+
+    /**
+     * Returns the index of the item with the key, or -1, and sets j to the key's index in the keyset.
+     * @param c its keyset, keyBits and length
+     */
+    U_FORCE_INLINE int32_t find(const ResourceCompactContainer &c, const char *key, const char **realKey, int32_t &j) const {
+        if (c.keyBits == nullptr) { return j = find(c.keyset, key, realKey); }
+        CompactBits has(c.keyBits);
+        if (c.length > MAX_KEYS_TO_GO_THROUGH) {
+            j = find(c.keyset, key, realKey);
+            return j >= 0 && has.test(j) ? has.rank(j) : -1;
+        }
+        // A keyset has the keys of the table in every locale, many times as many as one table may have.
+        j = -1;
+        for (int32_t i = 0; i < c.length; ++i) {
+            j = has.next(j);
+            const char *tableKey = d->poolBundleKeys + c.keyset[1 + j];
+            int result = compareKeys(d, key, tableKey);
+            if (result == 0) {
+                *realKey = tableKey;
+                return i;
+            }
+            if (result < 0) { break; }
+        }
+        return -1;
     }
 
     /** Returns the index of the key in the keyset, or -1. */
@@ -384,15 +401,19 @@ private:
      * Remembers in c where the item is, from where the ones that follow it are nearer than from where their offset is stored.
      */
     Resource itemInSequence(ResourceCompactContainer &c, int32_t i, int32_t j) const {
-        const uint8_t *stored = c.items;
-        int32_t n = c.length;
-        if (c.mode == COMPACT_MIXED) {
-            int32_t fields = (n + 15) >> 4;
-            int32_t values = CompactBits(stored).count(fields);
-            i -= CompactBits(stored).rank(i);
-            stored += (fields + values) << 1;
-            n -= values;
+        if (c.sequence == nullptr) {
+            c.sequence = c.items;
+            c.sequenceLength = c.length;
+            if (c.mode == COMPACT_MIXED) {
+                int32_t fields = (c.length + 15) >> 4;
+                int32_t values = CompactBits(c.items).count(fields);
+                c.sequence += (fields + values) << 1;
+                c.sequenceLength -= values;
+            }
         }
+        if (c.mode == COMPACT_MIXED) { i -= CompactBits(c.items).rank(i); }
+        const uint8_t *stored = c.sequence;
+        int32_t n = c.sequenceLength;
         // stored: the offsets of every 8th of the n items
         int32_t group = i >> SKIP_SHIFT;
         int32_t from = group << SKIP_SHIFT;
@@ -635,6 +656,7 @@ const char16_t *widenFirst(const ResourceData *pResData, uint32_t o, uint32_t ke
     if (there != nullptr) { return there; }
     Grammar grammar(pResData->grammar);
     const uint8_t *cells = pResData->pCompact + o;
+    // 0 for an empty string. There is code that looks at the unit before the end of any string: here that is the length.
     int32_t length = grammar.expand(cells, nullptr, nullptr);
     char16_t *s = gWideStrings.ensureEntry() ? gWideStrings.allocate(length) : nullptr;
     if (s == nullptr) { return nullptr; }
@@ -650,11 +672,6 @@ const char16_t *widenFirst(const ResourceData *pResData, uint32_t o, uint32_t ke
  * @param o the offset of its cells in pCompact
  */
 U_FORCE_INLINE inline const char16_t *widen(const ResourceData *pResData, uint32_t o, int32_t *pLength) {
-    if (pResData->pCompact[o] == 0) {
-        // What an empty string is in the other versions. There is code that looks at the unit before the end of any string.
-        if (pLength != nullptr) { *pLength = 0; }
-        return &gEmptyString.nul;
-    }
     uint32_t key = pResData->wideStringKey + o;
     const char16_t *s = gWideStrings.find(key);
     if (s == nullptr && (s = widenFirst(pResData, o, key)) == nullptr) {
