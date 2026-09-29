@@ -63,22 +63,11 @@ Grouper Grouper::forProperties(const DecimalFormatProperties& properties) {
     return {grouping1, grouping2, minGrouping, UNUM_GROUPING_COUNT};
 }
 
-void Grouper::setLocaleData(const impl::ParsedPatternInfo &patternInfo, const Locale& locale,
-                            std::atomic<int16_t> *localeMinGrouping) {
-    auto minGroupingForLocale = [&]() -> int16_t {
-        int16_t result = localeMinGrouping != nullptr ? localeMinGrouping->load(std::memory_order_relaxed) : -1;
-        if (result < 0) {
-            result = getMinGroupingForLocale(locale);
-            if (localeMinGrouping != nullptr) {
-                localeMinGrouping->store(result, std::memory_order_relaxed);
-            }
-        }
-        return result;
-    };
+void Grouper::setLocaleData(const impl::ParsedPatternInfo &patternInfo, const Locale& locale) {
     if (fMinGrouping == -2) {
-        fMinGrouping = minGroupingForLocale();
+        fMinGrouping = getMinGroupingForLocale(locale);
     } else if (fMinGrouping == -3) {
-        fMinGrouping = static_cast<int16_t>(uprv_max(2, minGroupingForLocale()));
+        fMinGrouping = static_cast<int16_t>(uprv_max(2, getMinGroupingForLocale(locale)));
     } else {
         // leave fMinGrouping alone
     }

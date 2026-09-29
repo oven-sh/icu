@@ -10,8 +10,6 @@
 
 #if !UCONFIG_NO_FORMATTING
 
-#include <atomic>
-
 #include "unicode/appendable.h"
 #include "unicode/bytestream.h"
 #include "unicode/currunit.h"
@@ -1431,12 +1429,8 @@ class U_I18N_API Grouper : public UMemory {
         return fGrouping1 == -3;
     }
 
-    /**
-     * NON-CONST: mutates the current instance.
-     * @param localeMinGrouping where the locale's minimum grouping is remembered, negative until it is known
-     */
-    void setLocaleData(const impl::ParsedPatternInfo &patternInfo, const Locale& locale,
-                       std::atomic<int16_t> *localeMinGrouping = nullptr);
+    /** NON-CONST: mutates the current instance. */
+    void setLocaleData(const impl::ParsedPatternInfo &patternInfo, const Locale& locale);
 
     bool groupAtPosition(int32_t position, const impl::DecimalQuantity &value) const;
 

@@ -710,7 +710,6 @@
     <ClInclude Include="number_decimfmtprops.h" />
     <ClInclude Include="number_decnum.h" />
     <ClInclude Include="number_formatimpl.h" />
-    <ClInclude Include="number_localedata.h" />
     <ClInclude Include="number_longnames.h" />
     <ClInclude Include="number_microprops.h" />
     <ClInclude Include="number_modifiers.h" />

@@ -49,7 +49,6 @@ class DateFormat;
 class MessageFormat;
 class FieldPositionHandler;
 class TimeZoneFormat;
-class SharedDateFormatSymbols;
 class SharedNumberFormat;
 class SimpleDateFormatMutableNFs;
 class DateIntervalFormat;
@@ -713,15 +712,6 @@ public:
      */
     U_I18N_API virtual const DateFormatSymbols* getDateFormatSymbols() const;
 
-#ifndef U_HIDE_INTERNAL_API
-    /**
-     * oven-sh/icu: The symbols, for udat_setSymbols() to change:
-     * the format's own, which are a copy of the cache's if it has used those so far.
-     * @internal
-     */
-    U_I18N_API DateFormatSymbols* getOwnDateFormatSymbols(UErrorCode& status);
-#endif  /* U_HIDE_INTERNAL_API */
-
     /**
      * Set the date/time formatting symbols.  The caller no longer owns the
      * DateFormatSymbols object and should not delete it after making this call.
@@ -1258,19 +1248,7 @@ private:
      * A pointer to an object containing the strings to use in formatting (e.g.,
      * month and day names, AM and PM strings, time zone names, etc.)
      */
-    DateFormatSymbols*  fSymbols = nullptr;   // Owned, unless fSharedSymbols has them
-
-    /**
-     * The cache's symbols for a locale, if those are the ones in use. They are not to be changed.
-     */
-    const SharedDateFormatSymbols* fSharedSymbols = nullptr;
-
-    /**
-     * Sets fSymbols to the cache's for the locale, rather than to a copy of them, which is hundreds of strings.
-     */
-    void useSymbolsOf(const Locale& locale, UErrorCode& status);
-
-    void deleteSymbols();
+    DateFormatSymbols*  fSymbols = nullptr;   // Owned
 
     /**
      * The time zone formatter

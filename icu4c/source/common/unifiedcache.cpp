@@ -155,41 +155,17 @@ int32_t UnifiedCache::keyCount() const {
     return uhash_count(fHashtable);
 }
 
-class UnifiedCache::EvictionLock {
-public:
-    explicit EvictionLock(const UnifiedCache &cache) : fCache(cache) {
-        gCacheMutex->lock();
-    }
-    ~EvictionLock() {
-        const SharedObject *value = fCache.fValuesToDelete;
-        fCache.fValuesToDelete = nullptr;
-        gCacheMutex->unlock();
-        while (value != nullptr) {
-            const SharedObject *next = value->nextToDelete;
-            delete value;
-            value = next;
-        }
-    }
-    EvictionLock(const EvictionLock &) = delete;
-    EvictionLock &operator=(const EvictionLock &) = delete;
-private:
-    const UnifiedCache &fCache;
-};
-
 void UnifiedCache::flush() const {
+    std::lock_guard<std::mutex> lock(*gCacheMutex);
+
     // Use a loop in case cache items that are flushed held hard references to
     // other cache items making those additional cache items eligible for
     // flushing.
-    for (;;) {
-        EvictionLock lock(*this);
-        if (!_flush(false)) {
-            break;
-        }
-    }
+    while (_flush(false));
 }
 
 void UnifiedCache::handleUnreferencedObject() const {
-    EvictionLock lock(*this);
+    std::lock_guard<std::mutex> lock(*gCacheMutex);
     --fNumValuesInUse;
     _runEvictionSlice();
 }
@@ -248,7 +224,7 @@ UnifiedCache::~UnifiedCache() {
         // Now all that should be left in the cache are entries that refer to
         // each other and entries with hard references from outside the cache.
         // Nothing we can do about these so proceed to wipe out the cache.
-        EvictionLock lock(*this);
+        std::lock_guard<std::mutex> lock(*gCacheMutex);
         _flush(true);
     }
     uhash_close(fHashtable);
@@ -280,7 +256,7 @@ UBool UnifiedCache::_flush(UBool all) const {
                     static_cast<const SharedObject*>(element->value.pointer);
             U_ASSERT(sharedObject->cachePtr == this);
             uhash_removeElement(fHashtable, element);
-            removeSoftRef(sharedObject);    // Has the sharedObject deleted when softRefCount goes to zero.
+            removeSoftRef(sharedObject);    // Deletes the sharedObject when softRefCount goes to zero.
             result = true;
         }
     }
@@ -311,7 +287,7 @@ void UnifiedCache::_runEvictionSlice() const {
             const SharedObject *sharedObject =
                     static_cast<const SharedObject*>(element->value.pointer);
             uhash_removeElement(fHashtable, element);
-            removeSoftRef(sharedObject);   // Has sharedObject deleted when SoftRefCount goes to zero.
+            removeSoftRef(sharedObject);   // Deletes sharedObject when SoftRefCount goes to zero.
             ++fAutoEvictedCount;
             if (--maxItemsToEvict == 0) {
                 break;
@@ -349,7 +325,7 @@ void UnifiedCache::_putIfAbsentAndGet(
         const CacheKeyBase &key,
         const SharedObject *&value,
         UErrorCode &status) const {
-    EvictionLock lock(*this);
+    std::lock_guard<std::mutex> lock(*gCacheMutex);
     const UHashElement *element = uhash_find(fHashtable, &key);
     if (element != nullptr && !_inProgress(element)) {
         _fetch(element, value, status);
@@ -508,8 +484,7 @@ void UnifiedCache::removeSoftRef(const SharedObject *value) const {
     if (--value->softRefCount == 0) {
         --fNumValuesTotal;
         if (value->noHardReferences()) {
-            value->nextToDelete = fValuesToDelete;
-            fValuesToDelete = value;
+            delete value;
         } else {
             // This path only happens from flush(all). Which only happens from the
             // UnifiedCache destructor.  Nulling out value.cacheptr changes the behavior

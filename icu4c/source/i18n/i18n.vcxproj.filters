@@ -944,9 +944,6 @@
     <ClInclude Include="number_longnames.h">
       <Filter>formatting</Filter>
     </ClInclude>
-    <ClInclude Include="number_localedata.h">
-      <Filter>formatting</Filter>
-    </ClInclude>
     <ClInclude Include="number_microprops.h">
       <Filter>formatting</Filter>
     </ClInclude>

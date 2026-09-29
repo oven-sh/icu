@@ -7,12 +7,8 @@ macOS is not concerned: there Bun uses the system's ICU.
 
 ## What is different
 
-**It does less work to reach the same answers.** What a process pays for once (likely subtags, language and region
-codes, time zone tables) and what every formatter paid for again (its locale's number symbols and patterns, a copy of
-the date symbols) is decoded directly, looked up by hash, or read once and shared. The C API is meant to return what
-ICU's returns, status codes included; where it is known not to is below.
-
-**It reads its largest data in smaller forms**, in place, with nothing decompressed. Each is specified where it is read:
+**It reads its largest data in smaller forms**, in place, with nothing decompressed. The C API is meant to return what
+ICU's returns, status codes included; where it is known not to is below. Each form is specified where it is read:
 
 | data | form | specified in | written by |
 | ---- | ---- | ------------ | ---------- |
@@ -28,6 +24,10 @@ What is not read in place:
   ICU's API hands out `const char16_t *`, and ICU keeps them. Reading every string of the package leaves 23 MB.
 - A tailoring that is opened gets 3 kB of tables that say where things are (`CollationMappings::bmpBlocks`,
   `CollationData::latin1CE32s`).
+
+**It does not count who uses a resource bundle.** Every `UResourceBundle` counted itself in and out of its cache entry,
+and its parents', under a mutex, though nothing but `u_cleanup()` ever acted on the count. Entries stay until then
+without being counted. Reading a bundle of formatVersion 4 takes longer than reading ICU's, and this takes more off.
 
 **It can leave code out.** `UCONFIG_NO_PARSING` and `UCONFIG_NO_UNIT_CONVERSION` (`common/unicode/uconfig.h`), off
 unless a build defines them.

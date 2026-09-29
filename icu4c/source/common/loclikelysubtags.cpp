@@ -59,8 +59,6 @@ struct LikelySubtagsData {
     const uint8_t *trieBytes = nullptr;
     LSR *lsrs = nullptr;
     int32_t lsrsLength = 0;
-    /** The languages and regions of the LSRs, see readLSRs(). */
-    char *lsrSubtags = nullptr;
 
     LocaleDistanceData distanceData;
 
@@ -69,7 +67,6 @@ struct LikelySubtagsData {
     ~LikelySubtagsData() {
         ures_close(langInfoBundle);
         delete[] lsrs;
-        uprv_free(lsrSubtags);
     }
 
     void load(UErrorCode &errorCode) {
@@ -84,10 +81,8 @@ struct LikelySubtagsData {
         if (U_FAILURE(errorCode)) { return; }
 
         // Read all strings in the resource bundle and convert them to invariant char *.
-        LocalMemory<int32_t> languageIndexes, regionIndexes;
-        int32_t languagesLength = 0, regionsLength = 0;
-        const int32_t *lsrnum = nullptr, *paradigmnum = nullptr;
-        int32_t paradigmsLength = 0;
+        LocalMemory<int32_t> languageIndexes, regionIndexes, lsrSubtagIndexes;
+        int32_t languagesLength = 0, regionsLength = 0, lsrSubtagsLength = 0;
         ResourceArray m49Array;
         if (likelyTable.findValue("m49", value)) {
             m49Array = value.getArray(errorCode);
@@ -98,19 +93,18 @@ struct LikelySubtagsData {
         if (!readStrings(likelyTable, "languageAliases", value,
                          languageIndexes, languagesLength, errorCode) ||
                 !readStrings(likelyTable, "regionAliases", value,
-                             regionIndexes, regionsLength, errorCode)) {
+                             regionIndexes, regionsLength, errorCode) ||
+                !readLSREncodedStrings(likelyTable, "lsrnum", value, m49Array,
+                             lsrSubtagIndexes,lsrSubtagsLength, errorCode)) {
             return;
         }
-        if (likelyTable.findValue("lsrnum", value)) {
-            lsrnum = value.getIntVector(lsrsLength, errorCode);
-            if (U_FAILURE(errorCode)) { return; }
-        }
         if ((languagesLength & 1) != 0 ||
-                (regionsLength & 1) != 0) {
+                (regionsLength & 1) != 0 ||
+                (lsrSubtagsLength % 3) != 0) {
             errorCode = U_INVALID_FORMAT_ERROR;
             return;
         }
-        if (lsrsLength == 0) {
+        if (lsrSubtagsLength == 0) {
             errorCode = U_MISSING_RESOURCE_ERROR;
             return;
         }
@@ -129,8 +123,8 @@ struct LikelySubtagsData {
         UErrorCode matchErrorCode = U_ZERO_ERROR;
         ures_getValueWithFallback(langInfoBundle, "match", stackTempBundle.getAlias(),
                                   value, matchErrorCode);
-        LocalMemory<int32_t> partitionIndexes;
-        int32_t partitionsLength = 0;
+        LocalMemory<int32_t> partitionIndexes, paradigmSubtagIndexes;
+        int32_t partitionsLength = 0, paradigmSubtagsLength = 0;
         if (U_SUCCESS(matchErrorCode)) {
             ResourceTable matchTable = value.getTable(errorCode);
             if (U_FAILURE(errorCode)) { return; }
@@ -150,12 +144,14 @@ struct LikelySubtagsData {
             }
 
             if (!readStrings(matchTable, "partitions", value,
-                             partitionIndexes, partitionsLength, errorCode)) {
+                             partitionIndexes, partitionsLength, errorCode) ||
+                    !readLSREncodedStrings(matchTable, "paradigmnum", value, m49Array,
+                                 paradigmSubtagIndexes, paradigmSubtagsLength, errorCode)) {
                 return;
             }
-            if (matchTable.findValue("paradigmnum", value)) {
-                paradigmnum = value.getIntVector(paradigmsLength, errorCode);
-                if (U_FAILURE(errorCode)) { return; }
+            if ((paradigmSubtagsLength % 3) != 0) {
+                errorCode = U_INVALID_FORMAT_ERROR;
+                return;
             }
 
             if (matchTable.findValue("distances", value)) {
@@ -190,15 +186,18 @@ struct LikelySubtagsData {
         }
         if (U_FAILURE(errorCode)) { return; }
 
-        lsrSubtags = static_cast<char *>(
-            uprv_calloc(REGIONS_LIMIT + lsrsLength + paradigmsLength, SUBTAG_CAPACITY));
-        if (lsrSubtags == nullptr) {
+        lsrsLength = lsrSubtagsLength / 3;
+        lsrs = new LSR[lsrsLength];
+        if (lsrs == nullptr) {
             errorCode = U_MEMORY_ALLOCATION_ERROR;
             return;
         }
-        char *languages = lsrSubtags + REGIONS_LIMIT * SUBTAG_CAPACITY;
-        lsrs = readLSRs(lsrnum, lsrsLength, LSR::IMPLICIT_LSR, m49Array, value, languages, errorCode);
-        if (U_FAILURE(errorCode)) { return; }
+        for (int32_t i = 0, j = 0; i < lsrSubtagsLength; i += 3, ++j) {
+            lsrs[j] = LSR(strings.get(lsrSubtagIndexes[i]),
+                          strings.get(lsrSubtagIndexes[i + 1]),
+                          strings.get(lsrSubtagIndexes[i + 2]),
+                          LSR::IMPLICIT_LSR);
+        }
 
         if (partitionsLength > 0) {
             distanceData.partitions = static_cast<const char **>(
@@ -212,11 +211,20 @@ struct LikelySubtagsData {
             }
         }
 
-        if (paradigmsLength > 0) {
-            distanceData.paradigmsLength = paradigmsLength;
-            distanceData.paradigms = readLSRs(
-                paradigmnum, paradigmsLength, LSR::DONT_CARE_FLAGS, m49Array, value,
-                languages + lsrsLength * SUBTAG_CAPACITY, errorCode);
+        if (paradigmSubtagsLength > 0) {
+            distanceData.paradigmsLength = paradigmSubtagsLength / 3;
+            LSR *paradigms = new LSR[distanceData.paradigmsLength];
+            if (paradigms == nullptr) {
+                errorCode = U_MEMORY_ALLOCATION_ERROR;
+                return;
+            }
+            for (int32_t i = 0, j = 0; i < paradigmSubtagsLength; i += 3, ++j) {
+                paradigms[j] = LSR(strings.get(paradigmSubtagIndexes[i]),
+                                   strings.get(paradigmSubtagIndexes[i + 1]),
+                                   strings.get(paradigmSubtagIndexes[i + 2]),
+                                   LSR::DONT_CARE_FLAGS);
+            }
+            distanceData.paradigms = paradigms;
         }
     }
 
@@ -244,73 +252,90 @@ private:
         }
         return true;
     }
-    /** Room for a language or a region, and its NUL. */
-    static constexpr int32_t SUBTAG_CAPACITY = 4;
-    /** An encoded region is less than this. */
-    static constexpr int32_t REGIONS_LIMIT = 27 * 27;
-
-    /**
-     * There are thousands of LSRs, and this is in the way of the first use of most of what has to do with locales.
-     * So their subtags are not gathered in `strings`, which hashes each:
-     * a script is uscript_getShortName()'s, a region is written once, where lsrSubtags has a place for each there can be,
-     * and a language is written for each LSR.
-     * @param languages where in lsrSubtags
-     */
-    LSR *readLSRs(const int32_t *encoded, int32_t length, int32_t flags,
-                  const ResourceArray &m49Array, ResourceValue &value, char *languages, UErrorCode &errorCode) {
-        if (U_FAILURE(errorCode)) { return nullptr; }
-        LocalArray<LSR> result(new LSR[length]);
-        if (result.isNull()) {
-            errorCode = U_MEMORY_ALLOCATION_ERROR;
-            return nullptr;
+    UnicodeString toLanguage(int encoded) {
+        if (encoded == 0) {
+            return UNICODE_STRING_SIMPLE("");
         }
-        for (int32_t i = 0; i < length; ++i, languages += SUBTAG_CAPACITY) {
-            int32_t lsr = encoded[i];
-            if (lsr == 0) {
-                result[i] = LSR("", "", "", flags);
-                continue;
-            }
-            if (lsr == 1) {
-                result[i] = LSR("skip", "script", "", flags);
-                continue;
-            }
-            const char *script = uscript_getShortName(static_cast<UScriptCode>((lsr >> 24) & 0xff));
-            if (script == nullptr) { script = ""; }
-            U_ASSERT(*script == 0 || uprv_strlen(script) == 4);
-
-            lsr &= 0x00ffffff;
-            int32_t language = lsr % (27 * 27 * 27);
-            languages[0] = static_cast<char>('a' + ((language % 27) - 1));
-            languages[1] = static_cast<char>('a' + (((language / 27) % 27) - 1));
-            if (language / (27 * 27) != 0) {
-                languages[2] = static_cast<char>('a' + ((language / (27 * 27)) - 1));
-            }
-
-            int32_t regionIndex = (lsr / (27 * 27 * 27)) % REGIONS_LIMIT;
-            char *region = lsrSubtags + regionIndex * SUBTAG_CAPACITY;
-            if (*region != 0) {
-                // written before
-            } else if (regionIndex >= 27) {
-                region[0] = static_cast<char>('A' + ((regionIndex % 27) - 1));
-                region[1] = static_cast<char>('A' + (((regionIndex / 27) % 27) - 1));
-            } else if (m49Array.getValue(regionIndex, value)) {
-                // Selected M49 code index, find the code from "m49" resource.
-                int32_t m49Length = 0;
-                const char16_t *m49 = value.getString(m49Length, errorCode);
-                if (U_FAILURE(errorCode)) { return nullptr; }
-                if (m49Length >= SUBTAG_CAPACITY) {
-                    errorCode = U_INVALID_FORMAT_ERROR;
-                    return nullptr;
-                }
-                u_UCharsToChars(m49, region, m49Length);
-            } else {
-                // "m49" does not include the index.
-                errorCode = U_MISSING_RESOURCE_ERROR;
-                return nullptr;
-            }
-            result[i] = LSR(languages, script, region, flags);
+        if (encoded == 1) {
+            return UNICODE_STRING_SIMPLE("skip");
         }
-        return result.orphan();
+        encoded &= 0x00ffffff;
+        encoded %= 27*27*27;
+        char lang[3];
+        lang[0] = 'a' + ((encoded % 27) - 1);
+        lang[1] = 'a' + (((encoded / 27 ) % 27) - 1);
+        if (encoded / (27 * 27) == 0) {
+            return UnicodeString(lang, 2, US_INV);
+        }
+        lang[2] = 'a' + ((encoded / (27 * 27)) - 1);
+        return UnicodeString(lang, 3, US_INV);
+    }
+    UnicodeString toScript(int encoded) {
+        if (encoded == 0) {
+            return UNICODE_STRING_SIMPLE("");
+        }
+        if (encoded == 1) {
+            return UNICODE_STRING_SIMPLE("script");
+        }
+        encoded = (encoded >> 24) & 0x000000ff;
+        const char* script = uscript_getShortName(static_cast<UScriptCode>(encoded));
+        if (script == nullptr) {
+            return UNICODE_STRING_SIMPLE("");
+        }
+        U_ASSERT(uprv_strlen(script) == 4);
+        return UnicodeString(script, 4, US_INV);
+    }
+    UnicodeString m49IndexToCode(const ResourceArray &m49Array, ResourceValue &value, int index, UErrorCode &errorCode) {
+        if (U_FAILURE(errorCode)) {
+            return UNICODE_STRING_SIMPLE("");
+        }
+        if (m49Array.getValue(index, value)) {
+            return value.getUnicodeString(errorCode);
+        }
+        // "m49" does not include the index.
+        errorCode = U_MISSING_RESOURCE_ERROR;
+        return UNICODE_STRING_SIMPLE("");
+    }
+
+    UnicodeString toRegion(const ResourceArray& m49Array, ResourceValue &value, int encoded, UErrorCode &errorCode) {
+        if (U_FAILURE(errorCode) || encoded == 0 || encoded == 1) {
+            return UNICODE_STRING_SIMPLE("");
+        }
+        encoded &= 0x00ffffff;
+        encoded /= 27 * 27 * 27;
+        encoded %= 27 * 27;
+        if (encoded < 27) {
+            // Selected M49 code index, find the code from "m49" resource.
+            return  m49IndexToCode(m49Array, value, encoded, errorCode);
+        }
+        char region[2];
+        region[0] = 'A' + ((encoded % 27) - 1);
+        region[1] = 'A' + (((encoded / 27) % 27) - 1);
+        return UnicodeString(region, 2, US_INV);
+    }
+
+    bool readLSREncodedStrings(const ResourceTable &table, const char* key, ResourceValue &value, const ResourceArray& m49Array,
+                     LocalMemory<int32_t> &indexes, int32_t &length, UErrorCode &errorCode) {
+        if (U_FAILURE(errorCode)) { return false; }
+        if (table.findValue(key, value)) {
+            const int32_t* vectors = value.getIntVector(length, errorCode);
+            if (U_FAILURE(errorCode)) { return false; }
+            if (length == 0) { return true; }
+            int32_t *rawIndexes = indexes.allocateInsteadAndCopy(length * 3);
+            if (rawIndexes == nullptr) {
+                errorCode = U_MEMORY_ALLOCATION_ERROR;
+                return false;
+            }
+            for (int i = 0; i < length; ++i) {
+                rawIndexes[i*3] = strings.addByValue(toLanguage(vectors[i]), errorCode);
+                rawIndexes[i*3+1] = strings.addByValue(toScript(vectors[i]), errorCode);
+                rawIndexes[i*3+2] = strings.addByValue(
+                    toRegion(m49Array, value, vectors[i], errorCode), errorCode);
+                if (U_FAILURE(errorCode)) { return false; }
+            }
+            length *= 3;
+        }
+        return true;
     }
 };
 
@@ -459,14 +484,12 @@ LikelySubtags::LikelySubtags(LikelySubtagsData &data) :
         regionAliases(std::move(data.regionAliases)),
         trie(data.trieBytes),
         lsrs(data.lsrs),
-        lsrSubtags(data.lsrSubtags),
 #if U_DEBUG
         lsrsLength(data.lsrsLength),
 #endif // U_DEBUG
         distanceData(std::move(data.distanceData)) {
     data.langInfoBundle = nullptr;
     data.lsrs = nullptr;
-    data.lsrSubtags = nullptr;
 
     // Cache the result of looking up language="und" encoded as "*", and "und-Zzzz" ("**").
     UStringTrieResult result = trie.next(u'*');
@@ -493,7 +516,6 @@ LikelySubtags::~LikelySubtags() {
     ures_close(langInfoBundle);
     delete strings;
     delete[] lsrs;
-    uprv_free(lsrSubtags);
 }
 
 LSR LikelySubtags::makeMaximizedLsrFrom(const Locale &locale,

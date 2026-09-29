@@ -8,7 +8,6 @@
 #define __NUMBER_FORMATIMPL_H__
 
 #include "number_types.h"
-#include "sharedobject.h"
 #include "formatted_string_builder.h"
 #include "number_patternstring.h"
 #include "number_usageprefs.h"
@@ -28,8 +27,6 @@ namespace number::impl {
  */
 class NumberFormatterImpl : public UMemory {
   public:
-    ~NumberFormatterImpl();
-
     /**
      * Builds a "safe" MicroPropsGenerator, which is thread-safe and can be used repeatedly.
      * The caller owns the returned NumberFormatterImpl.
@@ -113,8 +110,6 @@ class NumberFormatterImpl : public UMemory {
     LocalPointer<const UsagePrefsHandler> fUsagePrefsHandler;
     LocalPointer<const UnitConversionHandler> fUnitConversionHandler;
     LocalPointer<const DecimalFormatSymbols> fSymbols;
-    /** The cache's data for the locale, which the symbols may be part of. */
-    const SharedObject *fLocaleData = nullptr;
     LocalPointer<const PluralRules> fRules;
     LocalPointer<const ParsedPatternInfo> fPatternInfo;
     LocalPointer<const ScientificHandler> fScientificHandler;
@@ -129,9 +124,6 @@ class NumberFormatterImpl : public UMemory {
     LocalPointer<const CompactHandler> fCompactHandler;
 
     NumberFormatterImpl(const MacroProps &macros, bool safe, UErrorCode &status);
-
-    NumberFormatterImpl(const NumberFormatterImpl &) = delete;
-    NumberFormatterImpl &operator=(const NumberFormatterImpl &) = delete;
 
     MicroProps& preProcessUnsafe(DecimalQuantity &inValue, UErrorCode &status);
 

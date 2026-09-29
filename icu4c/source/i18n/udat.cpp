@@ -1165,8 +1165,7 @@ udat_setSymbols(    UDateFormat             *format,
     verifyIsSimpleDateFormat(format, status);
     if(U_FAILURE(*status)) return;
 
-    DateFormatSymbols *syms = ((SimpleDateFormat *)format)->getOwnDateFormatSymbols(*status);
-    if(U_FAILURE(*status)) return;
+    DateFormatSymbols *syms = (DateFormatSymbols *)((SimpleDateFormat *)format)->getDateFormatSymbols();
 
     switch(type) {
     case UDAT_ERAS:

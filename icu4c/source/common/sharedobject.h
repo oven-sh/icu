@@ -177,12 +177,6 @@ private:
     
     mutable const UnifiedCacheBase *cachePtr;
 
-    /**
-     * The next of the values that the UnifiedCache has removed and is about to delete.
-     * For use by UnifiedCache implementation code only.
-     */
-    mutable const SharedObject *nextToDelete = nullptr;
-
 };
 
 U_NAMESPACE_END

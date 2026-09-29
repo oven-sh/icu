@@ -66,13 +66,8 @@ directory.
 - `threads.cpp`: the same from many threads at once. Build it and ICU with `-fsanitize=thread` (`configure` with
   `CFLAGS`, `CXXFLAGS` and `LDFLAGS`): with a race in how strings were written out, every thread still read the right
   strings, and ThreadSanitizer had 82 reports.
-- `eviction.cpp`: fills ICU's cache of shared objects until it evicts, from many threads. What is kept in that cache
-  here is referred to by other things in it, and deleting those with the cache's mutex held hung. Run it with a
-  timeout. `eviction.js` is the same idea in one long-lived Bun, but JavaScriptCore does not use ICU in the way that
-  hung.
 
-This ICU also does less work than ICU to reach the same answers. Two programs ask whether they are the same answers.
-They use nothing but the C API, so one binary runs with the shared libraries of the unchanged release and with those
+Two programs ask whether this ICU's answers are ICU's. They use nothing but the C API, so one binary runs with the shared libraries of the unchanged release and with those
 of this branch, and the outputs are to be identical:
 
 ```sh
@@ -95,9 +90,7 @@ node reencode.ts $build/data/out/build/icudt<version>l <directory>/icudt<version
 ICU_DATA=<directory> test/intltest/intltest
 ```
 
-Put the wrong tree's `pool.res` in one place and see the tests fail, or they may not be reading it. Run them after
-every change, with a timeout: the hang that `eviction.cpp` is for passed everything else here, ThreadSanitizer
-included, and showed only after `intltest` had filled the cache.
+Put the wrong tree's `pool.res` in one place and see the tests fail, or they may not be reading it.
 
 ICU's makefiles do not track headers. After changing one, delete `common/*.o` and `i18n/*.o`: a stale object that has
 a `ResourceTable` of another size on its stack does not fail where the mistake is.

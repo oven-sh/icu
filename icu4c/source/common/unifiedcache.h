@@ -353,18 +353,6 @@ class U_COMMON_API UnifiedCache : public UnifiedCacheBase {
    int32_t fMaxPercentageOfInUse;
    mutable int64_t fAutoEvictedCount;
    SharedObject *fNoValue;
-
-   /**
-    * The values that have been removed from the cache since gCacheMutex was taken, and that nothing refers to.
-    * They are deleted once it is released: a value may refer to other values in the cache,
-    * and letting go of the last reference to one takes the mutex, see handleUnreferencedObject().
-    */
-   mutable const SharedObject *fValuesToDelete = nullptr;
-
-   /**
-    * Holds gCacheMutex where values may be removed from the cache.
-    */
-   class EvictionLock;
    
    UnifiedCache(const UnifiedCache &other) = delete;
    UnifiedCache &operator=(const UnifiedCache &other) = delete;

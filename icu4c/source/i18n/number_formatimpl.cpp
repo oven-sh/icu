@@ -19,83 +19,10 @@
 #include "number_compact.h"
 #include "uresimp.h"
 #include "ureslocs.h"
-#include "number_localedata.h"
-
-U_NAMESPACE_BEGIN
-
-SharedNumberLocaleData::SharedNumberLocaleData(const Locale &locale, const NumberingSystem &ns, UErrorCode nsStatus)
-        : nsStatus(nsStatus), symbols(locale, ns, symbolsStatus) {
-    uprv_strncpy(nsName, ns.getName(), sizeof(nsName) - 1);
-    nsName[sizeof(nsName) - 1] = 0;
-    for (auto &pattern : patterns) { pattern = nullptr; }
-}
-
-SharedNumberLocaleData::~SharedNumberLocaleData() = default;
-
-void SharedNumberLocaleData::get(const Locale &locale, const SharedNumberLocaleData *&ptr) {
-    UErrorCode status = U_ZERO_ERROR;
-    UnifiedCache::getByLocale(locale, ptr, status);
-    if (ptr != nullptr && ptr->defaultLocale != &Locale::getDefault()) {
-        SharedObject::clearPtr(ptr);
-    }
-}
-
-const char16_t *SharedNumberLocaleData::getPattern(number::impl::CldrPatternStyle style, UErrorCode &status) const {
-    // The string may have been written when it was asked for, see widen() in uresdata.cpp: that has to be seen with the pointer.
-    const char16_t *pattern = patterns[style].load(std::memory_order_acquire);
-    if (pattern == nullptr) {
-        UErrorCode patternStatus = U_ZERO_ERROR;
-        pattern = number::impl::utils::getPatternForStyle(symbols.getLocale(), nsName, style, patternStatus);
-        if (U_FAILURE(patternStatus)) {
-            status = patternStatus;
-            return pattern;
-        }
-        patternStatuses[style].store(patternStatus, std::memory_order_relaxed);
-        patterns[style].store(pattern, std::memory_order_release);
-    }
-    warn(patternStatuses[style].load(std::memory_order_relaxed), status);
-    return pattern;
-}
-
-template<>
-const SharedNumberLocaleData *LocaleCacheKey<SharedNumberLocaleData>::createObject(
-        const void * /*unused*/, UErrorCode &status) const {
-    // NumberingSystem::createInstance() ignores a keyword that is too long, and then clears the caller's status,
-    // which warn() cannot do.
-    char numbers[ULOC_KEYWORDS_CAPACITY];
-    UErrorCode nsStatus = U_ZERO_ERROR;
-    fLoc.getKeywordValue("numbers", numbers, sizeof(numbers), nsStatus);
-    if (U_FAILURE(nsStatus) || nsStatus == U_STRING_NOT_TERMINATED_WARNING) {
-        status = U_UNSUPPORTED_ERROR;
-        return nullptr;
-    }
-    nsStatus = U_ZERO_ERROR;
-    LocalPointer<const NumberingSystem> ns(NumberingSystem::createInstance(fLoc, nsStatus));
-    if (U_FAILURE(nsStatus)) {
-        status = nsStatus;
-        return nullptr;
-    }
-    LocalPointer<SharedNumberLocaleData> result(new SharedNumberLocaleData(fLoc, *ns, nsStatus), status);
-    if (U_FAILURE(status)) {
-        return nullptr;
-    }
-    if (U_FAILURE(result->symbolsStatus)) {
-        status = result->symbolsStatus;
-        return nullptr;
-    }
-    result->addRef();
-    return result.orphan();
-}
-
-U_NAMESPACE_END
 
 using namespace icu;
 using namespace icu::number;
 using namespace icu::number::impl;
-
-NumberFormatterImpl::~NumberFormatterImpl() {
-    SharedObject::clearPtr(fLocaleData);
-}
 
 
 NumberFormatterImpl::NumberFormatterImpl(const MacroProps& macros, UErrorCode& status)
@@ -240,28 +167,17 @@ NumberFormatterImpl::macrosToMicroGenerator(const MacroProps& macros, bool safe,
                        macros.unit.getComplexity(status) == UMEASURE_UNIT_MIXED;
 
     // Select the numbering system.
-    // The cache is by locale, so not for a numbering system that the locale does not say.
     LocalPointer<const NumberingSystem> nsLocal;
-    const NumberingSystem* ns = nullptr;
-    const SharedNumberLocaleData *localeData = nullptr;
+    const NumberingSystem* ns;
     if (macros.symbols.isNumberingSystem()) {
         ns = macros.symbols.getNumberingSystem();
     } else {
-        if (U_SUCCESS(status)) {
-            SharedNumberLocaleData::get(macros.locale, localeData);
-        }
-        if (localeData != nullptr) {
-            // Give ownership to this object.
-            fLocaleData = localeData;
-            SharedNumberLocaleData::warn(localeData->nsStatus, status);
-        } else {
-            // Without the cache, so that this fails only if what it does need fails.
-            ns = NumberingSystem::createInstance(macros.locale, status);
-            // Give ownership to the function scope.
-            nsLocal.adoptInstead(ns);
-        }
+        // TODO: Is there a way to avoid creating the NumberingSystem object?
+        ns = NumberingSystem::createInstance(macros.locale, status);
+        // Give ownership to the function scope.
+        nsLocal.adoptInstead(ns);
     }
-    const char* nsName = U_FAILURE(status) ? "latn" : ns != nullptr ? ns->getName() : localeData->nsName;
+    const char* nsName = U_SUCCESS(status) ? ns->getName() : "latn";
     uprv_strncpy(fMicros.nsName, nsName, 8);
     fMicros.nsName[8] = 0; // guarantee NUL-terminated
 
@@ -272,30 +188,19 @@ NumberFormatterImpl::macrosToMicroGenerator(const MacroProps& macros, bool safe,
     if (macros.symbols.isDecimalFormatSymbols()) {
         fMicros.simple.symbols = macros.symbols.getDecimalFormatSymbols();
     } else {
+        LocalPointer<DecimalFormatSymbols> newSymbols(
+            new DecimalFormatSymbols(macros.locale, *ns, status), status);
         if (U_FAILURE(status)) {
             return nullptr;
         }
-        if (localeData != nullptr) {
-            SharedNumberLocaleData::warn(localeData->symbolsStatus, status);
-        }
-        if (localeData != nullptr && !isCurrency) {
-            fMicros.simple.symbols = &localeData->symbols;
-        } else {
-            LocalPointer<DecimalFormatSymbols> newSymbols(
-                localeData != nullptr ? new DecimalFormatSymbols(localeData->symbols) :
-                                        new DecimalFormatSymbols(macros.locale, *ns, status), status);
+        if (isCurrency) {
+            newSymbols->setCurrency(currency.getISOCurrency(), status);
             if (U_FAILURE(status)) {
                 return nullptr;
             }
-            if (isCurrency) {
-                newSymbols->setCurrency(currency.getISOCurrency(), status);
-                if (U_FAILURE(status)) {
-                    return nullptr;
-                }
-            }
-            fMicros.simple.symbols = newSymbols.getAlias();
-            fSymbols.adoptInstead(newSymbols.orphan());
         }
+        fMicros.simple.symbols = newSymbols.getAlias();
+        fSymbols.adoptInstead(newSymbols.orphan());
     }
 
     // Load and parse the pattern string. It is used for grouping sizes and affixes only.
@@ -319,8 +224,7 @@ NumberFormatterImpl::macrosToMicroGenerator(const MacroProps& macros, bool safe,
         } else {
             patternStyle = CLDR_PATTERN_STYLE_CURRENCY;
         }
-        pattern = localeData != nullptr ? localeData->getPattern(patternStyle, status) :
-            utils::getPatternForStyle(macros.locale, nsName, patternStyle, status);
+        pattern = utils::getPatternForStyle(macros.locale, nsName, patternStyle, status);
         if (U_FAILURE(status)) {
             return nullptr;
         }
@@ -401,8 +305,7 @@ NumberFormatterImpl::macrosToMicroGenerator(const MacroProps& macros, bool safe,
     } else {
         fMicros.simple.grouping = Grouper::forStrategy(UNUM_GROUPING_AUTO);
     }
-    fMicros.simple.grouping.setLocaleData(
-        *fPatternInfo, macros.locale, localeData != nullptr ? &localeData->minGrouping : nullptr);
+    fMicros.simple.grouping.setLocaleData(*fPatternInfo, macros.locale);
 
     // Padding strategy
     if (!macros.padder.isBogus()) {
