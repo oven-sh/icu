@@ -1368,6 +1368,13 @@ TimeZoneNamesImpl::loadTimeZoneNames(const UnicodeString& tzID, UErrorCode& stat
 
 TimeZoneNames::MatchInfoCollection*
 TimeZoneNamesImpl::find(const UnicodeString& text, int32_t start, uint32_t types, UErrorCode& status) const {
+#if UCONFIG_NO_PARSING
+    (void)text;
+    (void)start;
+    (void)types;
+    status = U_UNSUPPORTED_ERROR;
+    return nullptr;
+#else
     ZNameSearchHandler handler(types);
     TimeZoneNames::MatchInfoCollection* matches;
     TimeZoneNamesImpl* nonConstThis = const_cast<TimeZoneNamesImpl*>(this);
@@ -1407,6 +1414,7 @@ TimeZoneNamesImpl::find(const UnicodeString& text, int32_t start, uint32_t types
         // Third try: we must return this one.
         return doFind(handler, text, start, status);
     }
+#endif
 }
 
 TimeZoneNames::MatchInfoCollection*
@@ -2236,6 +2244,13 @@ TZDBTimeZoneNames::getTimeZoneDisplayName(const UnicodeString& /* tzID */, UTime
 
 TZDBTimeZoneNames::MatchInfoCollection*
 TZDBTimeZoneNames::find(const UnicodeString& text, int32_t start, uint32_t types, UErrorCode& status) const {
+#if UCONFIG_NO_PARSING
+    (void)text;
+    (void)start;
+    (void)types;
+    status = U_UNSUPPORTED_ERROR;
+    return nullptr;
+#else
     umtx_initOnce(gTZDBNamesTrieInitOnce, &prepareFind, status);
     if (U_FAILURE(status)) {
         return nullptr;
@@ -2248,6 +2263,7 @@ TZDBTimeZoneNames::find(const UnicodeString& text, int32_t start, uint32_t types
     }
     int32_t maxLen = 0;
     return handler.getMatches(maxLen);
+#endif
 }
 
 const TZDBNames*

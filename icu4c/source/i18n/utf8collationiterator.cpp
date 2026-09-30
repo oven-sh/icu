@@ -51,7 +51,7 @@ UTF8CollationIterator::handleNextCE32(UChar32 &c, UErrorCode & /*errorCode*/) {
     c = u8[pos++];
     if(U8_IS_SINGLE(c)) {
         // ASCII 00..7F
-        return trie->data32[c];
+        return getCE32FromBMP(c);
     }
     uint8_t t1, t2;
     if(0xe0 <= c && c < 0xf0 &&
@@ -61,18 +61,17 @@ UTF8CollationIterator::handleNextCE32(UChar32 &c, UErrorCode & /*errorCode*/) {
         // U+0800..U+FFFF except surrogates
         c = (((c & 0xf) << 12) | ((t1 & 0x3f) << 6) | t2);
         pos += 2;
-        return UTRIE2_GET32_FROM_U16_SINGLE_LEAD(trie, c);
+        return getCE32FromBMP(c);
     } else if(c < 0xe0 && c >= 0xc2 && pos != length && (t1 = (u8[pos] - 0x80)) <= 0x3f) {
         // U+0080..U+07FF
-        uint32_t ce32 = trie->data32[trie->index[(UTRIE2_UTF8_2B_INDEX_2_OFFSET - 0xc0) + c] + t1];
         c = ((c & 0x1f) << 6) | t1;
         ++pos;
-        return ce32;
+        return getCE32FromBMP(c);
     } else {
         // Function call for supplementary code points and error cases.
         // Illegal byte sequences yield U+FFFD.
         c = utf8_nextCharSafeBody(u8, &pos, length, c, -3);
-        return data->getCE32(c);
+        return getCE32FromCodePoint(c);
     }
 }
 
@@ -159,7 +158,7 @@ FCDUTF8CollationIterator::handleNextCE32(UChar32 &c, UErrorCode &errorCode) {
             c = u8[pos++];
             if(U8_IS_SINGLE(c)) {
                 // ASCII 00..7F
-                return trie->data32[c];
+                return getCE32FromBMP(c);
             }
             uint8_t t1, t2;
             if(0xe0 <= c && c < 0xf0 &&
@@ -178,13 +177,12 @@ FCDUTF8CollationIterator::handleNextCE32(UChar32 &c, UErrorCode &errorCode) {
                 }
             } else if(c < 0xe0 && c >= 0xc2 && pos != length && (t1 = (u8[pos] - 0x80)) <= 0x3f) {
                 // U+0080..U+07FF
-                uint32_t ce32 = trie->data32[trie->index[(UTRIE2_UTF8_2B_INDEX_2_OFFSET - 0xc0) + c] + t1];
                 c = ((c & 0x1f) << 6) | t1;
                 ++pos;
                 if(CollationFCD::hasTccc(c) && pos != length && nextHasLccc()) {
                     pos -= 2;
                 } else {
-                    return ce32;
+                    return getCE32FromBMP(c);
                 }
             } else {
                 // Function call for supplementary code points and error cases.
@@ -197,7 +195,7 @@ FCDUTF8CollationIterator::handleNextCE32(UChar32 &c, UErrorCode &errorCode) {
                     if(CollationFCD::hasTccc(U16_LEAD(c)) && pos != length && nextHasLccc()) {
                         pos -= 4;
                     } else {
-                        return data->getCE32FromSupplementary(c);
+                        return getCE32FromCodePoint(c);
                     }
                 }
             }
@@ -215,7 +213,7 @@ FCDUTF8CollationIterator::handleNextCE32(UChar32 &c, UErrorCode &errorCode) {
             switchToForward();
         }
     }
-    return UTRIE2_GET32_FROM_U16_SINGLE_LEAD(trie, c);
+    return getCE32FromBMP(c);
 }
 
 UBool

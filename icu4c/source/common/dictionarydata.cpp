@@ -23,6 +23,7 @@ U_NAMESPACE_BEGIN
 
 const int32_t  DictionaryData::TRIE_TYPE_BYTES = 0;
 const int32_t  DictionaryData::TRIE_TYPE_UCHARS = 1;
+const int32_t  DictionaryData::TRIE_TYPE_SUCCINCT = 2;
 const int32_t  DictionaryData::TRIE_TYPE_MASK = 7;
 const int32_t  DictionaryData::TRIE_HAS_VALUES = 8;
 
@@ -78,6 +79,181 @@ int32_t UCharsDictionaryMatcher::matches(UText *text, int32_t maxLength, int32_t
         if (lengthMatched >= maxLength) {
             break;
         }
+    }
+
+    if (prefix != nullptr) {
+        *prefix = codePointsMatched;
+    }
+    return wordCount;
+}
+
+namespace {
+
+inline int32_t countBits(uint64_t x) {
+#if defined(__GNUC__) || defined(__clang__)
+    return __builtin_popcountll(x);
+#else
+    x = x - ((x >> 1) & 0x5555555555555555);
+    x = (x & 0x3333333333333333) + ((x >> 2) & 0x3333333333333333);
+    x = (x + (x >> 4)) & 0x0f0f0f0f0f0f0f0f;
+    return static_cast<int32_t>((x * 0x0101010101010101) >> 56);
+#endif
+}
+
+/** @param x not 0 */
+inline int32_t lowestBit(uint64_t x) {
+#if defined(__GNUC__) || defined(__clang__)
+    return __builtin_ctzll(x);
+#else
+    return countBits((x & (0 - x)) - 1);
+#endif
+}
+
+/** The index of the i-th of the set bits of x, of which there are more than i. */
+inline int32_t selectBit(uint64_t x, int32_t i) {
+    while (i-- > 0) { x &= x - 1; }
+    return lowestBit(x);
+}
+
+inline uint64_t bitsBelow(int32_t i) { return (uint64_t{1} << i) - 1; }
+
+inline uint64_t load64(const uint8_t *p) {
+    uint64_t x;
+    uprv_memcpy(&x, p, 8);
+    return x;
+}
+
+}  // namespace
+
+SuccinctDictionaryMatcher::SuccinctDictionaryMatcher(const uint8_t *data, UDataMemory *f) : file(f) {
+    const int32_t *header = reinterpret_cast<const int32_t *>(data);
+    singles = header[1];
+    unitIndex = reinterpret_cast<const uint16_t *>(data + header[2]);
+    unitBlocks = reinterpret_cast<const uint16_t *>(data + header[3]);
+    labels = data + header[4];
+    blocks = reinterpret_cast<const Block *>(data + header[5]);
+    wordValues = data + header[6];
+    starts = reinterpret_cast<const uint32_t *>(data + header[7]);
+}
+
+SuccinctDictionaryMatcher::~SuccinctDictionaryMatcher() {
+    udata_close(file);
+}
+
+int32_t SuccinctDictionaryMatcher::getType() const {
+    return DictionaryData::TRIE_TYPE_SUCCINCT;
+}
+
+int32_t SuccinctDictionaryMatcher::find(int32_t first, uint32_t label) const {
+    int32_t block = first >> 6;
+    uint64_t bits = blocks[block].isLast >> (first & 63);
+    int32_t length;
+    if (bits != 0) {
+        length = lowestBit(bits) + 1;
+    } else {
+        do { bits = blocks[++block].isLast; } while (bits == 0);
+        length = (block << 6) + lowestBit(bits) + 1 - first;
+    }
+    const uint8_t *p = labels + first;
+    if (length >= 32) {
+        int32_t word = static_cast<int32_t>(label >> 6);
+        bits = load64(p + (word << 3));
+        if (((bits >> (label & 63)) & 1) == 0) { return -1; }
+        first += countBits(bits & bitsBelow(label & 63));
+        while (word > 0) { first += countBits(load64(p + (--word << 3))); }
+        return first;
+    }
+    // 8 at a time. The lowest byte of x that is 0 is a label that is the same; what is above it may be wrong, and is not looked at.
+    uint64_t same = label * 0x0101010101010101u;
+    for (int32_t i = 0; i < length; i += 8) {
+        uint64_t x = load64(p + i) ^ same;
+        x = (x - 0x0101010101010101u) & ~x & 0x8080808080808080u;
+        if (x != 0) {
+            i += lowestBit(x) >> 3;
+            return i < length ? first + i : -1;
+        }
+    }
+    return -1;
+}
+
+int32_t SuccinctDictionaryMatcher::firstChild(int32_t node) const {
+    const Block &b = blocks[node >> 6];
+    // As many groups after the one that the block knows of as there are nodes with children before this one.
+    int32_t groups = countBits(b.hasChildren & bitsBelow(node & 63));
+    int32_t child = static_cast<int32_t>(b.firstChild);
+    if (groups == 0) { return child; }
+    int32_t block = child >> 6;
+    uint64_t bits = blocks[block].isLast & ~bitsBelow(child & 63);
+    for (int32_t count; (count = countBits(bits)) < groups; bits = blocks[++block].isLast) { groups -= count; }
+    return (block << 6) + selectBit(bits, groups - 1) + 1;
+}
+
+int32_t SuccinctDictionaryMatcher::matches(UText *text, int32_t maxLength, int32_t limit,
+                            int32_t *lengths, int32_t *cpLengths, int32_t *values,
+                            int32_t *prefix) const {
+    int32_t startingTextIndex = static_cast<int32_t>(utext_getNativeIndex(text));
+    int32_t wordCount = 0;
+    int32_t codePointsMatched = 0;
+    // The group that the first byte of the next character is looked for in.
+    int32_t first = 0;
+
+    for (UChar32 c = utext_next32(text); c >= 0; c=utext_next32(text)) {
+        int32_t lengthMatched = static_cast<int32_t>(utext_getNativeIndex(text)) - startingTextIndex;
+        codePointsMatched += 1;
+        // Like UCharsDictionaryMatcher, which looks for c among UTF-16 units.
+        uint32_t place = c <= 0xffff ? unitBlocks[(unitIndex[c >> 6] << 6) + (c & 63)] : 0;
+        if (place-- == 0) {
+            break;
+        }
+        UBool isWord;
+        int32_t value = 0;
+        // The first child, 0 if there is none, -1 if that is yet to be found.
+        int32_t child;
+        int32_t node = 0;
+        if (first == 0) {
+            uint32_t start = starts[place];
+            if (start == 0) {
+                break;
+            }
+            isWord = (start >> 20) & 1;
+            value = static_cast<int32_t>(start >> 24);
+            child = static_cast<int32_t>(start & 0xfffff);
+        } else {
+            if (place < singles) {
+                node = find(first, place);
+            } else {
+                place -= singles;
+                node = find(first, singles + (place >> 8));
+                if (node >= 0) {
+                    node = find(firstChild(node), place & 0xff);
+                }
+            }
+            if (node < 0) {
+                break;
+            }
+            const Block &b = blocks[node >> 6];
+            isWord = (b.isWord >> (node & 63)) & 1;
+            if (isWord && values != nullptr) {
+                value = wordValues[b.words + countBits(b.isWord & bitsBelow(node & 63))];
+            }
+            child = -static_cast<int32_t>((b.hasChildren >> (node & 63)) & 1);
+        }
+        if (isWord && wordCount < limit) {
+            if (values != nullptr) {
+                values[wordCount] = value;
+            }
+            if (lengths != nullptr) {
+                lengths[wordCount] = lengthMatched;
+            }
+            if (cpLengths != nullptr) {
+                cpLengths[wordCount] = codePointsMatched;
+            }
+            ++wordCount;
+        }
+        if (child == 0 || lengthMatched >= maxLength) {
+            break;
+        }
+        first = child > 0 ? child : firstChild(node);
     }
 
     if (prefix != nullptr) {

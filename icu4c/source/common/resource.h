@@ -40,18 +40,55 @@ class ResourceValue;
 // rather than an abstraction like Java UResource.Key.
 
 /**
+ * Only for implementation use: a table or array of resource bundle formatVersion 4, taken apart,
+ * and where the last item read from it was. See uresdata.cpp.
+ * @internal
+ */
+struct ResourceCompactContainer {
+    /** Of a table: its length, key offsets, then the items' types, four bits each. */
+    const uint16_t *keyset;
+    /** The bits that say which of the keyset's keys the table has, or nullptr if it has them all. */
+    const uint8_t *keyBits;
+    /** What follows the header and those bits. */
+    const uint8_t *items;
+    /** Where the item numbered index is. */
+    const uint8_t *place;
+    /** The offsets of every 8th of the items that are stored one after the other, or nullptr if that is yet to be found. */
+    const uint8_t *sequence;
+    /** How many those items are. */
+    int32_t sequenceLength;
+    int32_t length;
+    int32_t mode;
+    /** The item that was read last of those that are stored one after the other, or -1. */
+    int32_t index;
+    /** The item whose key was read last, or -1, and the key's index in the keyset. */
+    int32_t keyOf, key;
+};
+
+/**
  * Interface for iterating over a resource bundle array resource.
  */
 class U_COMMON_API ResourceArray {
 public:
     /** Constructs an empty array object. */
-    ResourceArray() : items16(nullptr), items32(nullptr), length(0) {}
+    ResourceArray() : items16(nullptr), items32(nullptr), length(0) { compact.length = 0; }
 
     /** Only for implementation use. @internal */
     ResourceArray(const uint16_t *i16, const uint32_t *i32, int32_t len,
                   const ResourceTracer& traceInfo) :
             items16(i16), items32(i32), length(len),
-            fTraceInfo(traceInfo) {}
+            fTraceInfo(traceInfo) { compact.length = 0; }
+
+    /**
+     * Only for implementation use: an array of formatVersion 4, once internalCompact() is filled in and passed to this.
+     * @internal
+     */
+    explicit ResourceArray(const ResourceTracer& traceInfo) :
+            items16(nullptr), items32(nullptr), length(0), fTraceInfo(traceInfo) {}
+    /** Only for implementation use. @internal */
+    ResourceCompactContainer &internalCompact() { return compact; }
+    /** Only for implementation use. @internal */
+    void internalSetCompact() { length = compact.length; }
 
     /**
      * @return The number of items in the array resource.
@@ -71,6 +108,8 @@ private:
     const uint16_t *items16;
     const uint32_t *items32;
     int32_t length;
+    /** In use if its length (array) or keyset (table) is not 0. */
+    mutable ResourceCompactContainer compact;
     ResourceTracer fTraceInfo;
 };
 
@@ -80,14 +119,27 @@ private:
 class U_COMMON_API ResourceTable {
 public:
     /** Constructs an empty table object. */
-    ResourceTable() : keys16(nullptr), keys32(nullptr), items16(nullptr), items32(nullptr), length(0) {}
+    ResourceTable() : keys16(nullptr), keys32(nullptr), items16(nullptr), items32(nullptr), length(0) {
+        compact.keyset = nullptr;
+    }
 
     /** Only for implementation use. @internal */
     ResourceTable(const uint16_t *k16, const int32_t *k32,
                   const uint16_t *i16, const uint32_t *i32, int32_t len,
                   const ResourceTracer& traceInfo) :
             keys16(k16), keys32(k32), items16(i16), items32(i32), length(len),
-            fTraceInfo(traceInfo) {}
+            fTraceInfo(traceInfo) { compact.keyset = nullptr; }
+
+    /**
+     * Only for implementation use: a table of formatVersion 4, once internalCompact() is filled in and passed to this.
+     * @internal
+     */
+    explicit ResourceTable(const ResourceTracer& traceInfo) :
+            keys16(nullptr), keys32(nullptr), items16(nullptr), items32(nullptr), length(0), fTraceInfo(traceInfo) {}
+    /** Only for implementation use. @internal */
+    ResourceCompactContainer &internalCompact() { return compact; }
+    /** Only for implementation use. @internal */
+    void internalSetCompact() { length = compact.length; }
 
     /**
      * @return The number of items in the array resource.
@@ -114,6 +166,8 @@ private:
     const uint16_t *items16;
     const uint32_t *items32;
     int32_t length;
+    /** In use if its length (array) or keyset (table) is not 0. */
+    mutable ResourceCompactContainer compact;
     ResourceTracer fTraceInfo;
 };
 

@@ -21,6 +21,7 @@
 #include "unicode/ucol.h"
 #include "unicode/uniset.h"
 #include "collation.h"
+#include "collationmappings.h"
 #include "normalizer2impl.h"
 #include "utrie2.h"
 
@@ -49,7 +50,7 @@ struct U_I18N_API CollationData : public UMemory {
     static constexpr int32_t MAX_NUM_SCRIPT_RANGES = 256;
 
     CollationData(const Normalizer2Impl &nfc)
-            : trie(nullptr),
+            : trie(nullptr), root(nullptr), rootIndex(nullptr), rootValues(nullptr),
               ce32s(nullptr), ces(nullptr), contexts(nullptr), base(nullptr),
               jamoCE32s(nullptr),
               nfcImpl(nfc),
@@ -61,12 +62,50 @@ struct U_I18N_API CollationData : public UMemory {
               numScripts(0), scriptsIndex(nullptr), scriptStarts(nullptr), scriptStartsLength(0),
               rootElements(nullptr), rootElementsLength(0) {}
 
+    // oven-sh/icu: Only the root data has a trie. A tailoring has mappings, of code points only.
+
     uint32_t getCE32(UChar32 c) const {
-        return UTRIE2_GET32(trie, c);
+        return trie != nullptr ? UTRIE2_GET32(trie, c) : mappings.get(c);
     }
 
     uint32_t getCE32FromSupplementary(UChar32 c) const {
-        return UTRIE2_GET32_FROM_SUPP(trie, c);
+        return trie != nullptr ? UTRIE2_GET32_FROM_SUPP(trie, c) : mappings.get(c);
+    }
+
+    /**
+     * What the root data has, whether or not a tailoring maps c.
+     * @param c a code point of the BMP, or a UTF-16 code unit
+     */
+    uint32_t getCE32FromRootBMP(UChar32 c) const {
+        return rootValues[_UTRIE2_INDEX_FROM_U16_SINGLE_LEAD(rootIndex, c)];
+    }
+
+    /** To be called once the trie and the base are set. */
+    void setRoot() {
+        root = base != nullptr ? base : this;
+        rootIndex = root->trie->index;
+        rootValues = root->trie->data32;
+        for(UChar32 c = 0; c < LATIN1_LIMIT; ++c) {
+            uint32_t ce32 = mappings.get(c);
+            if(ce32 != Collation::FALLBACK_CE32) {
+                latin1CE32s[c] = ce32;
+                latin1IsMapped[c >> 6] |= uint64_t{1} << (c & 0x3f);
+            } else {
+                latin1CE32s[c] = getCE32FromRootBMP(c);
+            }
+        }
+    }
+
+    /** The CE32 of these data if they map c, else the root's. */
+    uint32_t getCE32OrTheRoots(UChar32 c) const {
+        if(static_cast<uint32_t>(c) < static_cast<uint32_t>(LATIN1_LIMIT)) { return latin1CE32s[c]; }
+        uint32_t ce32 = getCE32(c);
+        return ce32 == Collation::FALLBACK_CE32 ? base->getCE32(c) : ce32;
+    }
+
+    /** @param c a code point below LATIN1_LIMIT */
+    UBool isMappedLatin1(UChar32 c) const {
+        return (latin1IsMapped[c >> 6] >> (c & 0x3f)) & 1;
     }
 
     UBool isDigit(UChar32 c) const {
@@ -167,11 +206,27 @@ struct U_I18N_API CollationData : public UMemory {
     /** @see jamoCE32s */
     static const int32_t JAMO_CE32S_LENGTH = 19 + 21 + 27;
 
-    /** Main lookup trie. */
+    /** Main lookup trie, of the root data. */
     const UTrie2 *trie;
+    /** In place of it, of a tailoring. */
+    CollationMappings mappings;
+    /**
+     * The root data, which is the base or this, and the arrays of its trie.
+     * Here so that neither making a CollationIterator nor looking a character up has to go and find them.
+     */
+    const CollationData *root;
+    const uint16_t *rootIndex;
+    const uint32_t *rootValues;
+    static constexpr UChar32 LATIN1_LIMIT = 0x100;
+    /**
+     * Not in the data: for each code point below the limit, the CE32 of these data if they map it, else the root's.
+     * ICU's tailorings have copies of the root's mappings for most of these, for speed.
+     */
+    uint32_t latin1CE32s[LATIN1_LIMIT];
+    uint64_t latin1IsMapped[LATIN1_LIMIT >> 6] = {};
     /**
      * Array of CE32 values.
-     * At index 0 there must be CE32(U+0000)
+     * In the root data, at index 0 there must be CE32(U+0000)
      * to support U+0000's special-tag for NUL-termination handling.
      */
     const uint32_t *ce32s;

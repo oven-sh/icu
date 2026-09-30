@@ -236,7 +236,7 @@ main(int argc,
                 "\t-C or --noBinaryCollation  do not generate binary collation image;\n"
                 "\t                           makes .res file smaller but collator instantiation much slower;\n"
                 "\t                           maintains ability to get tailoring rules\n"
-                "\t-R or --omitCollationRules do not include collation (tailoring) rules;\n"
+                "\t-R or --omitCollationRules include a space in place of collation (tailoring) rules;\n"
                 "\t                           makes .res file smaller and maintains collator instantiation speed\n"
                 "\t                           but tailoring rules will not be available (they are rarely used)\n");
         fprintf(stderr,

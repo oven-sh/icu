@@ -283,6 +283,9 @@ ICULanguageBreakFactory::loadDictionaryMatcherFor(UScriptCode script) {
             const char16_t* characters = reinterpret_cast<const char16_t*>(data + offset);
             m = new UCharsDictionaryMatcher(characters, file);
         }
+        else if (trieType == DictionaryData::TRIE_TYPE_SUCCINCT && !U_IS_BIG_ENDIAN) {
+            m = new SuccinctDictionaryMatcher(data + offset, file);
+        }
         if (m == nullptr) {
             // no matcher exists to take ownership - either we are an invalid 
             // type or memory allocation failed

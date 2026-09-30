@@ -105,13 +105,18 @@ struct U_I18N_API CollationDataReader /* all static */ {
     static UBool U_CALLCONV
     isAcceptable(void *context, const char *type, const char *name, const UDataInfo *pInfo);
 
+
 private:
+    /** oven-sh/icu: 5 for the root collation data, 6 for a tailoring. */
+    static UBool isAcceptableVersion(int32_t formatVersion, void *context, const UDataInfo *pInfo);
+
     CollationDataReader() = delete;  // no constructor
 };
 
 /*
  * Format of collation data (ucadata.icu, binary data in coll/ *.res files).
- * Format version 5.
+ * Format version 5 for the root collation data, as in ICU.
+ * Format version 6 for tailorings, which is oven-sh/icu's. ICU's tailorings, of version 5, are not read.
  *
  * The root collation data is stored in the ucadata.icu file.
  * Tailorings are stored inside .res resource bundle files, with a complete file header.
@@ -177,13 +182,14 @@ private:
  *      that are either stored as part of the reorderCodes array
  *      or regenerated at load time.
  *
- * UTrie2 trie; -- see utrie2_impl.h and utrie2.h
- *      The trie holds the main collation data. Each code point is mapped to a 32-bit value.
+ * In the root collation data: UTrie2 trie; -- see utrie2_impl.h and utrie2.h
+ * In a tailoring: CollationMappings mappings; -- see collationmappings.h
+ *      This holds the main collation data. Each code point is mapped to a 32-bit value.
  *      It encodes a simple collation element (CE) in compact form, unless bits 7..6 are both set,
  *      in which case it is a special CE32 and contains a 4-bit tag and further data.
  *      See the Collation class for details.
  *
- *      The trie has a value for each lead surrogate code unit with some bits encoding
+ *      The root's trie has a value for each lead surrogate code unit with some bits encoding
  *      collective properties of the 1024 supplementary characters whose UTF-16 form starts with
  *      the lead surrogate. See Collation::LEAD_SURROGATE_TAG..
  *
@@ -229,6 +235,14 @@ private:
  *
  * UBool compressibleBytes[]; -- empty in all tailorings
  *      Flag for getSortKey(), indicating primary weight lead bytes that are compressible.
+ *
+ * -----------------
+ * Changes for formatVersion 6 (oven-sh/icu)
+ *
+ * Only tailorings have this version.
+ * A tailoring has CollationMappings in place of a UTrie2. They map only what the tailoring maps:
+ * whoever finds Collation::FALLBACK_CE32 there asks the root, as before.
+ * A tailoring has no copies of the root's mappings for ASCII and Latin-1 letters.
  *
  * -----------------
  * Changes for formatVersion 5 (ICU 55)

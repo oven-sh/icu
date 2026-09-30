@@ -74,7 +74,7 @@ static const UDataInfo dataInfo = {
     0,
 
     { 0x55, 0x43, 0x6f, 0x6c },         // dataFormat="UCol"
-    { 5, 0, 0, 0 },                     // formatVersion
+    { 6, 0, 0, 0 },                     // formatVersion
     { 6, 3, 0, 0 }                      // dataVersion
 };
 
@@ -245,7 +245,12 @@ CollationDataWriter::write(UBool isBase, const UVersionInfo dataVersion,
     if(hasMappings) {
         UErrorCode errorCode2 = U_ZERO_ERROR;
         int32_t length;
-        if(totalSize < capacity) {
+        if(data.trie == nullptr) {
+            length = data.mappings.getBinaryLength();
+            if(totalSize + length <= capacity) {
+                data.mappings.write(dest + totalSize);
+            }
+        } else if(totalSize < capacity) {
             length = utrie2_serialize(data.trie, dest + totalSize,
                                       capacity - totalSize, &errorCode2);
         } else {

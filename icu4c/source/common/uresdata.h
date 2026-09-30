@@ -50,7 +50,14 @@ typedef enum {
      * Resource type constant for arrays with 16-bit count and values.
      * All values are URES_STRING_V2 strings.
      */
-    URES_ARRAY16=9
+    URES_ARRAY16=9,
+
+    /**
+     * formatVersion 4: a table in the compact area, whose keys and item types are a keyset of the pool bundle.
+     */
+    URES_TABLE_COMPACT=10,
+    /** formatVersion 4: an array of strings in the compact area. */
+    URES_ARRAY_COMPACT=11
 
     /* Resource type 15 is not defined but effectively used by RES_BOGUS=0xffffffff. */
 } UResInternalType;
@@ -80,8 +87,8 @@ typedef uint32_t Resource;
 
 #define RES_GET_UINT_NO_TRACE(res) ((res)&0x0fffffff)
 
-#define URES_IS_ARRAY(type) ((int32_t)(type)==URES_ARRAY || (int32_t)(type)==URES_ARRAY16)
-#define URES_IS_TABLE(type) ((int32_t)(type)==URES_TABLE || (int32_t)(type)==URES_TABLE16 || (int32_t)(type)==URES_TABLE32)
+#define URES_IS_ARRAY(type) ((int32_t)(type)==URES_ARRAY || (int32_t)(type)==URES_ARRAY16 || (int32_t)(type)==URES_ARRAY_COMPACT)
+#define URES_IS_TABLE(type) ((int32_t)(type)==URES_TABLE || (int32_t)(type)==URES_TABLE16 || (int32_t)(type)==URES_TABLE32 || (int32_t)(type)==URES_TABLE_COMPACT)
 #define URES_IS_CONTAINER(type) (URES_IS_TABLE(type) || URES_IS_ARRAY(type))
 
 #define URES_MAKE_RESOURCE(type, offset) (((Resource)(type)<<28)|(Resource)(offset))
@@ -131,6 +138,27 @@ enum {
     URES_INDEX_16BIT_TOP,
     /** [7] checksum of the pool bundle (new in formatVersion 2.0, ICU 4.4) */
     URES_INDEX_POOL_CHECKSUM,
+    /* formatVersion 4, which only a pool bundle has: see its description below. */
+    /** [8] start of the keysets */
+    URES_INDEX_KEYSETS,
+    /** [9] start of the grammars */
+    URES_INDEX_GRAMMARS,
+    /** [10] start of the headers that are known by a byte */
+    URES_INDEX_HEADERS,
+    /** [11] start of the low 16 bits of the offsets of the pool's strings, by ordinal */
+    URES_INDEX_STRING_OFFSETS,
+    /** [12] first ordinal of a string whose offset has bit 16 set */
+    URES_INDEX_STRING_OFFSETS_HIGH_START,
+    /** [13] start of the pool's strings */
+    URES_INDEX_POOL_TEXT,
+    /** [14] which of the grammars they are written in */
+    URES_INDEX_POOL_GRAMMAR,
+    /** [15] number of bundles */
+    URES_INDEX_BUNDLES,
+    /** [16] start of the offsets of the bundles' names among the key strings, in the order of the names */
+    URES_INDEX_BUNDLE_NAMES,
+    /** [17] start of the offsets of the bundles, in the same order */
+    URES_INDEX_BUNDLE_OFFSETS,
     URES_INDEX_TOP
 };
 
@@ -158,6 +186,92 @@ enum {
 
 /*
  * File format for .res resource bundle files
+ *
+ * oven-sh/icu: New in formatVersion 4 compared with 3: -------------
+ *
+ * Written by bun/data/icu-res.ts from the bundles that genrb writes, where there is a pool bundle.
+ * genrb and the other tools neither write nor read it. The runtime reads every version, and one package may hold several.
+ *
+ * What it is for:
+ * - The locales of a tree have the same tables with the same keys, so in version 3 most of what is not text
+ *   is the same key offsets over and over, and an offset for each string that says
+ *   no more than where the string before it ended.
+ * - The text is UTF-16, of languages that seldom use more than a hundred characters, and says the same words over and over.
+ * - Each of thousands of bundles is an item of the package, with a name, a header, indexes and padding.
+ *
+ * Only a pool bundle has this version, and the bundles next to it are inside it rather than items of the package,
+ * whether they used it or not, but for those that have binary data.
+ * The runtime looks for a bundle there first (res_loadFromPool()), so a file of the bundle's name does not take its place
+ * as it does an item's, but for the files of a time zone update (u_getTimeZoneFilesDirectory()).
+ * It is little-endian, and its key strings are ASCII: nothing writes it otherwise, and ures_swap() does not swap it.
+ * After the key strings, it has the following.
+ * Each starts where an item of indexes[] says, in 32-bit units from the root resource like all offsets there.
+ *
+ * - Keysets. Each starts at an even offset in 16-bit units:
+ *     uint16_t N; uint16_t keyOffsets[N]; uint16_t types[(N+3)/4]
+ *   The key offsets are from the start of the key strings, in the order of the keys.
+ *   The type of the item with key j is bits 4*(j&3).. of types[j>>2].
+ *   12 and 13 are a Table (10) and an Array (11) that are stored among the items of the table, see below.
+ * - Grammars: uint32_t starts[], where each is, in 16-bit units from starts[0]. Each says what the cells of strings
+ *   (see below) stand for, in the bundles of a language or of a few:
+ *     uint16_t L, S, M, R; uint16_t letters[L+M]; uint16_t offsets[R+1]; uint8_t bodies[]
+ *   The cells 1..L stand for a letter each, a UTF-16 unit, and the cells L+1..L+S for the rules 0..S-1.
+ *   A cell c above that goes with the cell d after it. With i=(c-L-S-1)*255+d-1,
+ *   the two stand for the letter L+i if i<M, else for the rule S+i-M.
+ *   A rule stands for what the cells bodies[offsets[r]..offsets[r+1]-1] stand for, which is more than any one of them does.
+ * - uint32_t tableHeaders[256], arrayHeaders[256]: the headers of containers (see below) that are known by a byte.
+ * - uint16_t stringOffsets[]: for each of the pool's strings, which are known by their ordinals,
+ *   the low 16 bits of its offset in the pool's text. Bit 16 is set from the ordinal URES_INDEX_STRING_OFFSETS_HIGH_START on.
+ * - The pool's text: strings.
+ * - uint16_t bundleNames[]; uint32_t bundleOffsets[]
+ * - The bundles.
+ * - 8 bytes, of 0: the runtime looks for the ends of strings 8 bytes at a time, so up to 7 past the last one.
+ *
+ * A bundle is
+ *
+ *   Resource root;
+ *   uint16_t poolStringLimit; uint16_t attributes (bits 3..0) and grammar (bits 15..4);
+ *   uint16_t compactStart; uint16_t length;
+ *   32-bit resources; the compact area
+ *
+ * Offsets of 32-bit resources, compactStart and length are in 32-bit units from the root resource.
+ * The attributes are URES_ATT_NO_FALLBACK, and in bits 3..2 the shift, see below. Several names may have the same bundle.
+ * The 32-bit resources are as in version 3. All keys are the pool's.
+ *
+ * The compact area is addressed in bytes, from its start. It holds fields, headers and strings.
+ * A field is a 16-bit number, at any offset. Where it is itself an offset in the compact area,
+ * it is one that has been shifted right by the bundle's shift, which is 0 unless the area is larger than a field can tell.
+ * Byte 0 is 0: the empty string. An empty table or array is not in the compact area:
+ * it is a Table or an Array with the offset 0, as in version 3.
+ *
+ * Strings: a String-v2 offset at or above poolStringLimit is, less that limit, an offset in the compact area.
+ * Below it, it is the ordinal of one of the pool's strings. A Resource16 is the same, with what is above the limit shifted.
+ * A string is bytes, here called cells. The cells 1..0xfe stand for what the bundle's grammar says,
+ * and 0xff comes before a unit in three cells: 0x80 | bits 6..0, 0x80 | bits 13..7, 0x80 | bits 15..14.
+ * A 0 cell is the end, and no other cell is 0: no string contains U+0000.
+ * The runtime writes a string out in UTF-16 when it is first asked for (WideStrings in uresdata.cpp).
+ *
+ * The header of a container is a 24-bit number. It is stored as a byte c, and is tableHeaders[c] or arrayHeaders[c],
+ * or as 0xff and then its three bytes, the lowest first.
+ *
+ * 10 Table:  header; [field keyBits[(N+15)/16];] items
+ *            header bits 23..3: half the offset, in 16-bit units, of a keyset, which has N keys
+ *                   bit  2:     the table has the keys of the keyset whose bit is set in keyBits
+ *                               (bit j is bit j&15 of keyBits[j>>4]); otherwise it has them all
+ *                   bits 1..0:  how the items are stored
+ * 11 Array:  header; items
+ *            header bits 23..2: the number of items, all strings
+ *                   bits 1..0:  how the items are stored
+ *
+ *    How n items are stored:
+ *    0  field values[n]
+ *       A string is a Resource16. For any other type the value is the offset part of a Resource;
+ *       the type is the keyset's. (So an integer is one of 0..0xffff.)
+ *    1  field skip[(n-1)/8]; then the strings, one after the other
+ *       skip[g-1] is the offset of the (8*g)th string from the first.
+ *    2  field skip[(n-1)/8]; then the items, one after the other. An item of type 12 or 13 is the table or array itself,
+ *       all of whose items are strings. Any other is a field as for 0.
+ *    3  field isValue[(n+15)/16]; field values[number of bits set]; then the other m strings as for 1, with m for n
  *
  * ICU 56: New in formatVersion 3 compared with 2: -------------
  *
@@ -397,6 +511,22 @@ typedef struct ResourceData {
     UBool isPoolBundle;
     UBool usesPoolBundle;
     UBool useNativeStrcmp;
+    /* formatVersion 4 */
+    /** How far to the left a field is shifted that is an offset in pCompact. */
+    uint8_t fieldShift;
+    /** A bundle's compact area, which says that it is of this version. A pool bundle's text. */
+    const uint8_t *pCompact;
+    /** What the string at the start of pCompact is known by among those that have been written out in UTF-16. */
+    uint32_t wideStringKey;
+    /** What the cells of the strings of pCompact stand for. */
+    const uint16_t *grammar;
+    const uint16_t *poolKeysets;
+    const uint32_t *poolHeaders;
+    /** Of a bundle. */
+    const struct ResourceData *pool;
+    /* Of a pool bundle. */
+    const uint16_t *stringOffsets;
+    int32_t stringOffsetsHighStart;
 } ResourceData;
 
 struct UResourceDataEntry;   // forward declared for ResoureDataValue below; actually defined in uresimp.h
@@ -424,6 +554,17 @@ res_load(ResourceData *pResData,
 U_CFUNC void
 res_unload(ResourceData *pResData);
 
+/** Frees what belongs to no one bundle. For when all have been unloaded. */
+U_CFUNC void
+res_cleanup();
+
+/**
+ * Loads a bundle that is inside its pool bundle (formatVersion 4).
+ * @return false if the pool bundle has none of this name, or with a failure
+ */
+U_CFUNC UBool
+res_loadFromPool(ResourceData *pResData, const ResourceData *pool, const char *name, UErrorCode *errorCode);
+
 U_CAPI UResType U_EXPORT2
 res_getPublicType(Resource res);
 
@@ -438,6 +579,15 @@ res_getPublicType(Resource res);
  */
 U_CAPI const UChar * U_EXPORT2
 res_getStringNoTrace(const ResourceData *pResData, Resource res, int32_t *pLength);
+
+/**
+ * What it means that res_getString() or res_getStringNoTrace() returned nullptr. A string of formatVersion 4
+ * is written out in UTF-16 when it is first asked for, which takes memory.
+ */
+inline UErrorCode res_getStringError(Resource res) {
+    return RES_GET_TYPE(res) == URES_STRING || RES_GET_TYPE(res) == URES_STRING_V2 ?
+        U_MEMORY_ALLOCATION_ERROR : U_RESOURCE_TYPE_MISMATCH;
+}
 
 U_CAPI const uint8_t * U_EXPORT2
 res_getBinaryNoTrace(const ResourceData *pResData, Resource res, int32_t *pLength);

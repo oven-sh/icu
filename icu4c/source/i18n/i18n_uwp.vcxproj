@@ -580,6 +580,7 @@
     <ClInclude Include="collationfcd.h" />
     <ClInclude Include="collationiterator.h" />
     <ClInclude Include="collationkeys.h" />
+    <ClInclude Include="collationmappings.h" />
     <ClInclude Include="collationroot.h" />
     <ClInclude Include="collationrootelements.h" />
     <ClInclude Include="collationruleparser.h" />

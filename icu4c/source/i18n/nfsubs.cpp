@@ -716,6 +716,17 @@ NFSubstitution::doParse(const UnicodeString& text,
                         int32_t recursionCount,
                         Formattable& result) const
 {
+#if UCONFIG_NO_PARSING
+    (void)text;
+    (void)parsePosition;
+    (void)baseValue;
+    (void)nonNumericalExecutedRuleMask;
+    (void)recursionCount;
+    (void)upperBound;
+    (void)lenientParse;
+    (void)result;
+    return false;
+#else
 #ifdef RBNF_DEBUG
     fprintf(stderr, "<nfsubs> %x bv: %g ub: %g\n", this, baseValue, upperBound);
 #endif
@@ -787,6 +798,7 @@ NFSubstitution::doParse(const UnicodeString& text,
         result.setLong(0);
         return false;
     }
+#endif
 }
 
     /**
@@ -963,6 +975,17 @@ ModulusSubstitution::doParse(const UnicodeString& text,
                              int32_t recursionCount,
                              Formattable& result) const
 {
+#if UCONFIG_NO_PARSING
+    (void)text;
+    (void)parsePosition;
+    (void)baseValue;
+    (void)nonNumericalExecutedRuleMask;
+    (void)recursionCount;
+    (void)upperBound;
+    (void)lenientParse;
+    (void)result;
+    return false;
+#else
     // if this isn't a >>> substitution, we can just use the
     // inherited parse() routine to do the parsing
     if (ruleToUse == nullptr) {
@@ -983,6 +1006,7 @@ ModulusSubstitution::doParse(const UnicodeString& text,
 
         return true;
     }
+#endif
 }
 /**
  * Returns a textual description of the substitution
@@ -1158,6 +1182,16 @@ FractionalPartSubstitution::doParse(const UnicodeString& text,
                 int32_t recursionCount,
                 Formattable& resVal) const
 {
+#if UCONFIG_NO_PARSING
+    (void)text;
+    (void)parsePosition;
+    (void)baseValue;
+    (void)nonNumericalExecutedRuleMask;
+    (void)recursionCount;
+    (void)lenientParse;
+    (void)resVal;
+    return false;
+#else
     // if we're not in byDigits mode, we can just use the inherited
     // doParse()
     if (!byDigits) {
@@ -1223,6 +1257,7 @@ FractionalPartSubstitution::doParse(const UnicodeString& text,
         resVal.setDouble(result);
         return true;
     }
+#endif
 }
 
 bool
@@ -1295,6 +1330,16 @@ NumeratorSubstitution::doParse(const UnicodeString& text,
                                int32_t recursionCount,
                                Formattable& result) const
 {
+#if UCONFIG_NO_PARSING
+    (void)text;
+    (void)parsePosition;
+    (void)baseValue;
+    (void)nonNumericalExecutedRuleMask;
+    (void)recursionCount;
+    (void)upperBound;
+    (void)result;
+    return false;
+#else
     // we don't have to do anything special to do the parsing here,
     // but we have to turn lenient parsing off-- if we leave it on,
     // it SERIOUSLY messes up the algorithm
@@ -1355,6 +1400,7 @@ NumeratorSubstitution::doParse(const UnicodeString& text,
     }
 
     return true;
+#endif
 }
 
 bool

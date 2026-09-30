@@ -506,6 +506,13 @@ double
 ChoiceFormat::parseArgument(
         const MessagePattern &pattern, int32_t partIndex,
         const UnicodeString &source, ParsePosition &pos) {
+#if UCONFIG_NO_PARSING
+    (void)pattern;
+    (void)partIndex;
+    (void)source;
+    pos.setErrorIndex(pos.getIndex());
+    return uprv_getNaN();
+#else
     // find the best number (defined as the one with the longest parse)
     int32_t start = pos.getIndex();
     int32_t furthest = start;
@@ -535,6 +542,7 @@ ChoiceFormat::parseArgument(
         pos.setIndex(furthest);
     }
     return bestNumber;
+#endif
 }
 
 int32_t

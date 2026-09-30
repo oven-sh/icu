@@ -54,7 +54,7 @@ CollationDataReader::read(const CollationTailoring *base, const uint8_t *inBytes
         }
         const DataHeader *header = reinterpret_cast<const DataHeader *>(inBytes);
         if(!(header->dataHeader.magic1 == 0xda && header->dataHeader.magic2 == 0x27 &&
-                isAcceptable(tailoring.version, nullptr, nullptr, &header->info))) {
+                isAcceptableVersion(6, tailoring.version, &header->info))) {
             errorCode = U_INVALID_FORMAT_ERROR;
             return;
         }
@@ -167,10 +167,15 @@ CollationDataReader::read(const CollationTailoring *base, const uint8_t *inBytes
         data = tailoring.ownedData;
         data->base = baseData;
         data->numericPrimary = inIndexes[IX_OPTIONS] & 0xff000000;
-        data->trie = tailoring.trie = utrie2_openFromSerialized(
-            UTRIE2_32_VALUE_BITS, inBytes + offset, length, nullptr,
-            &errorCode);
+        if(baseData == nullptr) {
+            data->trie = tailoring.trie = utrie2_openFromSerialized(
+                UTRIE2_32_VALUE_BITS, inBytes + offset, length, nullptr,
+                &errorCode);
+        } else if(!data->mappings.read(inBytes + offset, length)) {
+            errorCode = U_INVALID_FORMAT_ERROR;
+        }
         if(U_FAILURE(errorCode)) { return; }
+        data->setRoot();
     } else if(baseData != nullptr) {
         // Use the base data. Only the settings are tailored.
         tailoring.data = baseData;
@@ -457,6 +462,11 @@ UBool U_CALLCONV
 CollationDataReader::isAcceptable(void *context,
                                   const char * /* type */, const char * /*name*/,
                                   const UDataInfo *pInfo) {
+    return isAcceptableVersion(5, context, pInfo);
+}
+
+UBool
+CollationDataReader::isAcceptableVersion(int32_t formatVersion, void *context, const UDataInfo *pInfo) {
     if(
         pInfo->size >= 20 &&
         pInfo->isBigEndian == U_IS_BIG_ENDIAN &&
@@ -465,7 +475,7 @@ CollationDataReader::isAcceptable(void *context,
         pInfo->dataFormat[1] == 0x43 &&
         pInfo->dataFormat[2] == 0x6f &&
         pInfo->dataFormat[3] == 0x6c &&
-        pInfo->formatVersion[0] == 5
+        pInfo->formatVersion[0] == formatVersion
     ) {
         UVersionInfo *version = static_cast<UVersionInfo *>(context);
         if(version != nullptr) {

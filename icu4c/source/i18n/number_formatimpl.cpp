@@ -245,6 +245,12 @@ NumberFormatterImpl::macrosToMicroGenerator(const MacroProps& macros, bool safe,
     /////////////////////////////////////////////////////////////////////////////////////
 
     // Unit Preferences and Conversions as our first step
+#if UCONFIG_NO_UNIT_CONVERSION
+    if (macros.usage.isSet() || isMixedUnit) {
+        status = U_UNSUPPORTED_ERROR;
+        return nullptr;
+    }
+#else
     if (macros.usage.isSet()) {
         if (!isCldrUnit) {
             // We only support "usage" when the input unit is specified, and is
@@ -261,6 +267,7 @@ NumberFormatterImpl::macrosToMicroGenerator(const MacroProps& macros, bool safe,
         fUnitConversionHandler.adoptInsteadAndCheckErrorCode(unitConversionHandler, status);
         chain = fUnitConversionHandler.getAlias();
     }
+#endif
 
     // Multiplier
     if (macros.scale.isValid()) {
@@ -390,6 +397,7 @@ NumberFormatterImpl::macrosToMicroGenerator(const MacroProps& macros, bool safe,
         if (macros.unitDisplayCase.isSet()) {
             unitDisplayCase = macros.unitDisplayCase.fValue;
         }
+#if !UCONFIG_NO_UNIT_CONVERSION
         if (macros.usage.isSet()) {
             fLongNameMultiplexer.adoptInsteadAndCheckErrorCode(
                 LongNameMultiplexer::forMeasureUnits(
@@ -405,7 +413,9 @@ NumberFormatterImpl::macrosToMicroGenerator(const MacroProps& macros, bool safe,
                 resolvePluralRules(macros.rules, macros.locale, status), chain,
                 fMixedUnitLongNameHandler.getAlias(), status);
             chain = fMixedUnitLongNameHandler.getAlias();
-        } else {
+        } else
+#endif
+        {
             MeasureUnit unit = macros.unit;
             if (!utils::unitIsBaseUnit(macros.perUnit)) {
                 unit = unit.product(macros.perUnit.reciprocal(status), status);

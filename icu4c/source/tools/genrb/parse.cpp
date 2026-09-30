@@ -970,7 +970,17 @@ writeCollationDataTOML(const char* outputdir, const char* name, const char* coll
     uint32_t trieDefault = root ? icu::Collation::UNASSIGNED_CE32 : icu::Collation::FALLBACK_CE32;
     icu::LocalUMutableCPTriePointer builder(umutablecptrie_open(trieDefault, trieDefault, status));
 
-    utrie2_enum(data->trie, nullptr, &convertTrie, builder.getAlias());
+    if (data->trie == nullptr) {
+        // ICU's tailorings have copies of the base's Hangul CE32s, in blocks per Jamo L. So has what ICU4X reads.
+        for (UChar32 c = icu::Hangul::HANGUL_BASE; c < icu::Hangul::HANGUL_LIMIT; c += icu::Hangul::JAMO_VT_COUNT) {
+            convertTrie(builder.getAlias(), c, c + icu::Hangul::JAMO_VT_COUNT - 1, data->base->getCE32(c));
+        }
+        data->mappings.forEachCodePoint([&builder](UChar32 c, uint32_t ce32) {
+            return convertTrie(builder.getAlias(), c, c, ce32);
+        });
+    } else {
+        utrie2_enum(data->trie, nullptr, &convertTrie, builder.getAlias());
+    }
 
     // If the diacritic table was cut short, copy CE32s between the lowered
     // limit and the max limit from the root to the tailoring. As of June 2022,
@@ -1237,10 +1247,13 @@ addCollation(ParseState* state, TableResource  *result, const char *collationTyp
             // all sub-elements of the collation table, including the Version.
             /* in order to achieve smaller data files, we can direct genrb */
             /* to omit collation rules */
-            if(!state->omitCollationRules) {
-                result->add(member, line, *status);
-                member = nullptr;
+            // oven-sh/icu: Something is left of them. Whether ucol_getRules() returns anything
+            // is how JavaScriptCore tells a tailoring from the root collator.
+            if(state->omitCollationRules && !rules.isEmpty()) {
+                sr->fString.setTo(icu::CollationTailoring::OMITTED_RULES);
             }
+            result->add(member, line, *status);
+            member = nullptr;
         }
         else  // Just copy non-special items.
         {
@@ -1283,6 +1296,7 @@ addCollation(ParseState* state, TableResource  *result, const char *collationTyp
     const icu::CollationTailoring *base = icu::CollationRoot::getRoot(intStatus);
     if(U_FAILURE(intStatus)) {
         error(line, "failed to load root collator (ucadata.icu) - %s", u_errorName(intStatus));
+        *status = intStatus;
         res_close(result);
         return nullptr;  // TODO: use LocalUResourceBundlePointer for result
     }
@@ -1354,6 +1368,7 @@ addCollation(ParseState* state, TableResource  *result, const char *collationTyp
     if(U_FAILURE(intStatus)) {
         fprintf(stderr, "CollationDataWriter::writeTailoring() failed: %s\n",
                 u_errorName(intStatus));
+        *status = intStatus;
         res_close(result);
         return nullptr;
     }

@@ -245,6 +245,11 @@ RelativeDateFormat::format(const Formattable& obj,
 void RelativeDateFormat::parse( const UnicodeString& text,
                     Calendar& cal,
                     ParsePosition& pos) const {
+#if UCONFIG_NO_PARSING
+    (void)text;
+    (void)cal;
+    pos.setErrorIndex(pos.getIndex());
+#else
 
     int32_t startIndex = pos.getIndex();
     if (fDatePattern.isEmpty()) {
@@ -336,6 +341,7 @@ void RelativeDateFormat::parse( const UnicodeString& text,
             pos.setErrorIndex(offset);
         }
     }
+#endif
 }
 
 UDate

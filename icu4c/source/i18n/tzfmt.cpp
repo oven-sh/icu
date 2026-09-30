@@ -811,6 +811,16 @@ TimeZoneFormat::parse(UTimeZoneFormatStyle style, const UnicodeString& text, Par
 TimeZone*
 TimeZoneFormat::parse(UTimeZoneFormatStyle style, const UnicodeString& text, ParsePosition& pos,
         int32_t parseOptions, UTimeZoneFormatTimeType* timeType /* = nullptr */) const {
+#if UCONFIG_NO_PARSING
+    (void)style;
+    (void)text;
+    (void)parseOptions;
+    if (timeType) {
+        *timeType = UTZFMT_TIME_TYPE_UNKNOWN;
+    }
+    pos.setErrorIndex(pos.getIndex());
+    return nullptr;
+#else
     if (timeType) {
         *timeType = UTZFMT_TIME_TYPE_UNKNOWN;
     }
@@ -1313,6 +1323,7 @@ TimeZoneFormat::parse(UTimeZoneFormatStyle style, const UnicodeString& text, Par
 
     pos.setErrorIndex(startIdx);
     return nullptr;
+#endif
 }
 
 void

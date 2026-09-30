@@ -123,3 +123,9 @@ icu4c/source/test/testdata/riwords.txt text !eol zos-working-tree-encoding=UTF-8
 icu4c/source/test/testdata/te_IN.txt text !eol zos-working-tree-encoding=UTF-8
 icu4c/source/test/testdata/timezoneTypes.txt text !eol zos-working-tree-encoding=UTF-8
 icu4c/source/test/testdata/windowsZones.txt text !eol zos-working-tree-encoding=UTF-8
+# oven-sh: left out of `git archive`, which is what GitHub serves as the tarball of a commit and what builds Bun's ICU
+# downloads. Nothing under icu4c/source: ICU's configure wants a Makefile.in in every directory there.
+/docs export-ignore
+/icu4j export-ignore
+/tools export-ignore
+/vendor export-ignore

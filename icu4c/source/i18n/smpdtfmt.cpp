@@ -2249,6 +2249,11 @@ SimpleDateFormat::isAfterNonNumericField(const UnicodeString &pattern, int32_t p
 void
 SimpleDateFormat::parse(const UnicodeString& text, Calendar& cal, ParsePosition& parsePos) const
 {
+#if UCONFIG_NO_PARSING
+    (void)text;
+    (void)cal;
+    parsePos.setErrorIndex(parsePos.getIndex());
+#else
     UErrorCode status = U_ZERO_ERROR;
     int32_t pos = parsePos.getIndex();
     if(parsePos.getIndex() < 0) {
@@ -2669,6 +2674,7 @@ ExitParse:
         parsePos.setErrorIndex(pos);
         parsePos.setIndex(start);
     }
+#endif
 }
 
 //----------------------------------------------------------------------

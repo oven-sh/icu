@@ -1286,6 +1286,9 @@
     <ClInclude Include="collationkeys.h">
       <Filter>collation</Filter>
     </ClInclude>
+    <ClInclude Include="collationmappings.h">
+      <Filter>collation</Filter>
+    </ClInclude>
     <ClInclude Include="collationroot.h">
       <Filter>collation</Filter>
     </ClInclude>

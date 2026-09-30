@@ -63,7 +63,7 @@ UTF16CollationIterator::handleNextCE32(UChar32 &c, UErrorCode & /*errorCode*/) {
         return Collation::FALLBACK_CE32;
     }
     c = *pos++;
-    return UTRIE2_GET32_FROM_U16_SINGLE_LEAD(trie, c);
+    return getCE32FromBMP(c);
 }
 
 char16_t
@@ -234,7 +234,7 @@ FCDUTF16CollationIterator::handleNextCE32(UChar32 &c, UErrorCode &errorCode) {
             switchToForward();
         }
     }
-    return UTRIE2_GET32_FROM_U16_SINGLE_LEAD(trie, c);
+    return getCE32FromBMP(c);
 }
 
 UBool

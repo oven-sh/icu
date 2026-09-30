@@ -22,10 +22,128 @@
 #include "collation.h"
 #include "collationdata.h"
 #include "uassert.h"
-#include "utrie2.h"
 #include "uvectr32.h"
 
 U_NAMESPACE_BEGIN
+
+namespace {
+
+constexpr int32_t MAPPINGS_HEADER_LENGTH = CollationMappings::LENGTHS_COUNT * 4;
+
+}  // namespace
+
+uint32_t
+CollationMappings::getFromMappedRange(UChar32 c) const {
+    return getFromMappedRangeInline(c);
+}
+
+uint32_t
+CollationMappings::get(UChar32 c) const {
+    if(static_cast<uint32_t>(c) <= 0xffff) {
+        uint32_t place = bmpBlocks[c >> 6];
+        return place == 0 ? Collation::FALLBACK_CE32 : getFromBMPInline(c, place);
+    }
+    return isInMappedRange(c) ? getFromMappedRange(c) : Collation::FALLBACK_CE32;
+}
+
+int32_t
+CollationMappings::countRanges() {
+    int32_t ranges = 0;
+    lengths[RANGE_WORDS_LENGTH] = 0;
+    for(int32_t i = 0; i < RANGE_WORDS; ++i) {
+        rangesBefore[i] = static_cast<uint16_t>(ranges);
+        ranges += CollationMappings::countBits(rangeBits[i]);
+        if(rangeBits[i] != 0) { ++lengths[RANGE_WORDS_LENGTH]; }
+    }
+    return ranges;
+}
+
+void
+CollationMappings::setBMPBlocks() {
+    auto within = [this](UChar32 c, int32_t start, int32_t length) {
+        // How many of the 64 code points from c are in the span.
+        int32_t from = c > lengths[start] ? c : lengths[start];
+        int32_t to = c + 0x40 < lengths[start] + lengths[length] ? c + 0x40 : lengths[start] + lengths[length];
+        return to > from ? to - from : 0;
+    };
+    for(UChar32 c = 0; c <= 0xffff; c += 0x40) {
+        int32_t in16 = within(c, SPAN16_START, SPAN16_LENGTH), in32 = within(c, SPAN32_START, SPAN32_LENGTH);
+        uint16_t place = 0;
+        if(in16 == 0x40) {
+            place = IN_SPAN16;
+        } else if(in32 == 0x40) {
+            place = IN_SPAN32;
+        } else if(in16 != 0 || in32 != 0) {
+            place = PARTLY_IN_SPAN;
+        } else if(isInMappedRange(c)) {
+            int32_t word = c >> 14;
+            int32_t range = rangesBefore[word] + countBits(rangeBits[word] & ((uint64_t{1} << ((c >> 8) & 0x3f)) - 1));
+            place = index[(range << 2) + ((c >> 6) & 3)];
+        }
+        bmpBlocks[c >> 6] = place;
+    }
+}
+
+int32_t
+CollationMappings::getBinaryLength() const {
+    int64_t length = (MAPPINGS_HEADER_LENGTH +
+            (static_cast<int64_t>(lengths[RANGE_WORDS_LENGTH]) + lengths[BLOCKS_LENGTH]) * 12 +
+            (static_cast<int64_t>(lengths[SPAN32_LENGTH]) + lengths[VALUES32_LENGTH]) * 4 +
+            (static_cast<int64_t>(lengths[INDEX_LENGTH]) + lengths[SPAN16_LENGTH] + lengths[VALUES16_LENGTH]) * 2 + 7) & ~7;
+    return length <= INT32_MAX ? static_cast<int32_t>(length) : INT32_MAX;
+}
+
+void
+CollationMappings::write(uint8_t *dest) const {
+    uint8_t *limit = dest + getBinaryLength();
+    auto append = [&dest](const void *bytes, int32_t length) {
+        if(length != 0) { uprv_memcpy(dest, bytes, length); }
+        dest += length;
+    };
+    append(lengths, sizeof(lengths));
+    for(int32_t i = 0; i < RANGE_WORDS; ++i) {
+        if(rangeBits[i] == 0) { continue; }
+        append(&i, 4);
+        append(&rangeBits[i], 8);
+    }
+    append(blockBits, lengths[BLOCKS_LENGTH] * 8);
+    append(blockValues, lengths[BLOCKS_LENGTH] * 4);
+    append(span32, lengths[SPAN32_LENGTH] * 4);
+    append(values32, lengths[VALUES32_LENGTH] * 4);
+    append(index, lengths[INDEX_LENGTH] * 2);
+    append(span16, lengths[SPAN16_LENGTH] * 2);
+    append(values16, lengths[VALUES16_LENGTH] * 2);
+    uprv_memset(dest, 0, limit - dest);
+}
+
+UBool
+CollationMappings::read(const uint8_t *bytes, int32_t length) {
+    if(length < MAPPINGS_HEADER_LENGTH) { return false; }
+    uprv_memcpy(lengths, bytes, sizeof(lengths));
+    for(int32_t i = 0; i < LENGTHS_COUNT; ++i) {
+        if(lengths[i] < 0 || lengths[i] > (i == SPAN16_START || i == SPAN32_START ? 0x10ffff : length)) { return false; }
+    }
+    if(lengths[RESERVED_LENGTH] != 0 || lengths[BLOCKS_LENGTH] > MAX_BLOCKS || getBinaryLength() > length) { return false; }
+    bytes += MAPPINGS_HEADER_LENGTH;
+    uprv_memset(rangeBits, 0, sizeof(rangeBits));
+    for(int32_t n = lengths[RANGE_WORDS_LENGTH]; n > 0; --n, bytes += 12) {
+        int32_t i;
+        uprv_memcpy(&i, bytes, 4);
+        if(i < 0 || i >= RANGE_WORDS) { return false; }
+        uprv_memcpy(&rangeBits[i], bytes + 4, 8);
+    }
+    int32_t words = lengths[RANGE_WORDS_LENGTH];
+    if(lengths[INDEX_LENGTH] != countRanges() * 4 || lengths[RANGE_WORDS_LENGTH] != words) { return false; }
+    blockBits = bytes;
+    blockValues = reinterpret_cast<const uint32_t *>(blockBits + lengths[BLOCKS_LENGTH] * 8);
+    span32 = blockValues + lengths[BLOCKS_LENGTH];
+    values32 = span32 + lengths[SPAN32_LENGTH];
+    index = reinterpret_cast<const uint16_t *>(values32 + lengths[VALUES32_LENGTH]);
+    span16 = index + lengths[INDEX_LENGTH];
+    values16 = span16 + lengths[SPAN16_LENGTH];
+    setBMPBlocks();
+    return true;
+}
 
 uint32_t
 CollationData::getIndirectCE32(uint32_t ce32) const {
