@@ -4,7 +4,7 @@
 //   bun test262.ts <bun executable> <test262 dir> <output file>
 
 import { spawn } from "node:child_process";
-import { mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { availableParallelism, tmpdir } from "node:os";
 import { join, relative } from "node:path";
 
@@ -110,6 +110,7 @@ await Promise.all(
     }
   }),
 );
+rmSync(work, { recursive: true });
 writeFileSync(output, results.join("\n") + "\n");
 const clean = results.filter(r => /\t1\t0 ($|Test262:AsyncTestComplete)/.test(r)).length;
 console.log(`${tests.length} tests, ${clean} pass`);
