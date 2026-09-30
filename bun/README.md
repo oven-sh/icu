@@ -48,13 +48,13 @@ unless a build defines them.
 ## The data
 
 `data/icu-data.ts` builds the package Bun ships from ICU's text sources, with ICU's own compilers. It says at its top
-how to run it, and next to each thing it leaves out why nothing in Bun can reach it. It took 9 seconds on 32 cores.
+how to run it, and next to each thing it leaves out why nothing in Bun can reach it. It took 11 seconds on 32 cores.
 
 | the data of ICU 78.3, bytes | |
 | --- | --- |
 | all of it, as ICU builds it | 33,107,232 |
-| what Bun can reach, as this ICU's tools write it (`--uncompacted`) | 17,990,848 |
-| the same, as packaged | 8,353,040 |
+| what Bun can reach, as this ICU's tools write it (`--uncompacted`) | 17,054,352 |
+| the same, as packaged | 7,959,504 |
 
 `icu-res.ts` and `icu-dict.ts` read back what they wrote, with a reader of their own, and compare it with what genrb
 and gendict wrote before they return. That the runtime reads the same is what `oracle/native/resources.cpp` is for.
